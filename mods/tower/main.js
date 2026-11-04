@@ -171,7 +171,9 @@ export default class Tower extends View {
           .child(div().absolute().left(0).top(0).bottom(0).w(bar).rounded(1).bg(on ? INK.amber : INK.t2)))
         .child(div().flex_none().text_size(12).font_family("Geist Mono").text_color(INK.t3)
           .child(ctx ? `${Math.round(ratio * 100)}%` : "–")));
-    return h_flex().id(`ac-${a.address}`).gap(8).items_center().cursor_pointer()
+    // The tag truncates; resting on the aircraft shows the session, space and status in full.
+    const full = [this.session(a), a.space_name, detail].filter(Boolean).join(" · ");
+    return h_flex().id(`ac-${a.address}`).gap(8).items_center().cursor_pointer().tooltip(full)
       .on_click(() => run("pane.focus", { pane: a.pane }))
       .child(svg("mods/tower/plane.svg").size(PLANE).flex_none().text_color(tint))
       .child(tag);

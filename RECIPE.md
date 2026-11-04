@@ -20,7 +20,7 @@ Left to right, then top to bottom:
   2. an 11 px spinner (working only) and what it's doing (Geist Mono 12 px, `#a3a9b8`);
   3. the space name (Nunito 12 px semibold, `#7a8296`, taking the rest of the row), a 72 px wide 2 px context bar (`#1d212b` track, `#a3a9b8` fill) and the percentage (Geist Mono 12 px, `#7a8296`; `–` when unknown).
   Planes are `#7a8296`; a waiting (TOWER) plane is red and its tag border is red at 50 %. Aircraft on one runway line up from the left, 298 px apart, starting 156 px into the card.
-- **Tab bar** (38 px): Herdr's tabs, except an unnamed tab shows its agent's session name instead of its number.
+- **Tab bar** (38 px): Herdr's tabs, except an unnamed tab shows its agent's session name (else its space's name) instead of its number.
 - **Work area**: padding 8, gap 8. Each pane is a card with radius 10, a 1 px `border` (1 px `accent`, amber, when focused) and Herdr's 30 px pane header.
 - **Status bar** (28 px): Herdr's workspace status.
 - **Theme** `control-tower`: background/canvas `#0b0d14`, chrome `#07080d`, foreground `#eef0f5`, border `#1d212b`, selected `#1a1e28`, hover `#161a24`, muted `#7a8296`, accent and cursor `#f2a93b`, selection `#26304a`, bright ANSI colors for terminal output.
@@ -32,7 +32,7 @@ Left to right, then top to bottom:
 - **What it's doing**: every 2.5 s the screen of each working or blocked agent is read. Working shows Claude Code's spinner verb ("Cogitating…") and the last tool call (`Edit(main.kt)`); blocked shows the last line ending in "?". Done shows "Done", idle "Idle".
 - **Context**: every 10 s, for local Claude Code agents, the newest assistant usage in the agent's own transcript (input + cache creation + cache read + output) against 200k, or 1M when the model name has `[1m]` or usage passes 200k. A compaction (a `"subtype": "compact_boundary"` line) after the last usage clears it to `–`; a pid the script can't read keeps its last value.
 - **Session name**: the agent's terminal title (Claude Code sets it) without leading symbols; when the title is a path, has `@` or is just the program name, the tab name; else the program name.
-- **Clicks**: an aircraft focuses its pane (`pane.focus`). A rail tile selects its space; right-click opens Herdr's space menu; hovering shows "N. name". + runs `space.new`, the gear `app.settings`. The tab bar works like Herdr's.
+- **Clicks**: an aircraft focuses its pane (`pane.focus`); resting the pointer on it shows a tooltip with the full session name, space name and status, joined by " · ". A rail tile selects its space; right-click opens Herdr's space menu; hovering shows "N. name". + runs `space.new`, the gear `app.settings`. The tab bar works like Herdr's.
 - The head and timers refresh every 30 s.
 
 ## Built from
@@ -43,7 +43,7 @@ Left to right, then top to bottom:
 - `themes/control-tower.json`: the theme above.
 - `mods/tower/`: `props().role === "head"` draws the head, anything else the runways. `plane.svg` is the aircraft (one path set, tinted with `text_color`). `fonts/` holds Nunito SemiBold and Bold (OFL), picked up automatically and used through `font_family("Nunito")`.
 - `mods/tower-rail/`: the rail.
-- `mods/tower-tabs/`: Herdr's shipped `tabs` (0.1.12), modified: an unnamed tab shows the lead agent's terminal title; the bar's left padding is a fixed 10 px. Apache-2.0, with its LICENSE.
+- `mods/tower-tabs/`: Herdr's shipped `tabs` (0.1.12), modified: an unnamed tab shows the lead agent's terminal title, else its space's name; the bar's left padding is a fixed 10 px. Apache-2.0, with its LICENSE.
 - `herdr` functions: `agents`, `terminals`, `spaces`, `panes`, `focused`, `run`, `exec`, `hc`, `props`, `shared`, `setAgentOrder`, `openOverlay`, `theme`, `window`, `layout`.
 - Commands: `pane.focus`, `space.select`, `space.new`, `app.settings`, and the tab bar's `tab.*`, `layout.show/hide/select`, `window.*`.
 - Shipped mods and icons: `pane`, `workspace-status`, `menu`, `new-menu`, and icons from `mods/workspace-chrome/` (spinner, plus, settings), `mods/pane/`, `mods/files/`, `mods/changes/`.
@@ -65,4 +65,4 @@ Left to right, then top to bottom:
 - Starting an agent puts an aircraft on RUNWAY with a spinner; when it waits for permission the aircraft slides to TOWER with a red plane; when it finishes unfocused it slides to APPROACH. No runway changes height.
 - Clicking an aircraft focuses its pane; that aircraft turns amber and its runway steps up while the previous one returns to `#11141c`.
 - A Claude Code agent's tag shows a context percentage within 10 s, and its session name matches its terminal title.
-- An unnamed tab shows the session name instead of a number.
+- An unnamed tab shows the session name (or, with no usable title, the space name) instead of a number.

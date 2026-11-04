@@ -1,5 +1,5 @@
 // Modified from Herdr's shipped `tabs` mod (0.1.12, Apache License 2.0, see LICENSE in this folder):
-// an unnamed tab shows its agent's session name, the bar keeps a fixed 10 px left padding.
+// an unnamed tab shows its agent's session name (or its space's name), the bar keeps a fixed 10 px left padding.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout } from "herdr";
@@ -57,11 +57,11 @@ export default class Tabs extends View {
     const item = (c, i) => {
       const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
       // An unnamed tab shows its agent's session name (the terminal title Claude Code sets),
-      // not its position.
+      // else its space's name, not its position.
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id && p.focused);
       const live = (lead?.title ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
       const telling = live && !/^[~/]/.test(live) && !live.includes("@") && live !== program?.name;
-      const name = !c.named && telling ? live : /^tb\d+$/.test(c.name) ? program?.name ?? "Terminal" : c.name;
+      const name = !c.named ? (telling ? live : space?.name || c.name) : /^tb\d+$/.test(c.name) ? program?.name ?? "Terminal" : c.name;
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
