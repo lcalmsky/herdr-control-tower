@@ -20,7 +20,7 @@ const LANES = [
   { id: "idle", name: "TAXI", sub: "Idle", color: "#7a8296" },
 ];
 const LANE = Object.fromEntries(LANES.map((l, i) => [l.id, { ...l, i }]));
-const LANE_H = 84, LANE_GAP = 8, LABEL_W = 148, PLANE = 26, TAG_W = 240, TAG_H = 64, PAD = 12;
+const LANE_H = 84, LANE_GAP = 8, LABEL_W = 148, PLANE = 26, BAR_W = 72, TAG_W = 240, TAG_H = 64, PAD = 12;
 const SLOT = PLANE + 8 + TAG_W + 24;
 const DASHES = 80; // enough for a wide window; the runway clips the rest
 const FONT = "Nunito";
@@ -155,19 +155,19 @@ export default class Tower extends View {
     const detail = (blocked || a.status === "working") && verb ? verb : a.status === "done" ? "Done" : a.status === "idle" ? "Idle" : lane.sub;
     const since = this.since[a.address]?.at;
     const tint = on ? INK.amber : blocked ? lane.color : INK.t3;
-    const bar = Math.round(ratio * (TAG_W - 64));
+    const bar = Math.round(ratio * BAR_W);
     const row = () => h_flex().h(16).gap(6).items_center().min_w(0);
     const tag = v_flex().w(TAG_W).h(TAG_H).px(12).py(8).justify_between().rounded(8).bg(INK.raised)
       .border(1).border_color(on ? INK.amber : blocked ? `${lane.color}80` : INK.line)
       .child(row()
-        .child(div().flex_shrink(0).max_w(140).truncate().text_size(14).font_family(FONT).font_bold().text_color(on ? INK.amber : INK.t1).child(this.session(a)))
-        .child(div().flex_1().min_w(0).truncate().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t3).child(a.space_name ?? ""))
+        .child(div().flex_1().min_w(0).truncate().text_size(14).font_family(FONT).font_bold().text_color(on ? INK.amber : INK.t1).child(this.session(a)))
         .when(Boolean(since), (el) => el.child(div().flex_none().text_size(12).font_family("Geist Mono").text_color(INK.t3).child(ago(now - since)))))
       .child(row()
         .when(a.status === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(INK.t2).spin(900)))
         .child(div().flex_1().min_w(0).truncate().text_size(12).font_family("Geist Mono").text_color(INK.t2).child(detail)))
       .child(row().gap(8)
-        .child(div().relative().flex_1().h(2).rounded(1).bg(INK.line)
+        .child(div().flex_1().min_w(0).truncate().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t3).child(a.space_name ?? ""))
+        .child(div().relative().w(BAR_W).flex_none().h(2).rounded(1).bg(INK.line)
           .child(div().absolute().left(0).top(0).bottom(0).w(bar).rounded(1).bg(on ? INK.amber : INK.t2)))
         .child(div().flex_none().text_size(12).font_family("Geist Mono").text_color(INK.t3)
           .child(ctx ? `${Math.round(ratio * 100)}%` : "–")));

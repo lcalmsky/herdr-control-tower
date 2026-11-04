@@ -4,7 +4,7 @@ A night air-traffic-control layout for [Herdr](https://herdr.dev). Every agent i
 
 ![Control Tower: agents sliding between runways as their status changes](demo.gif)
 
-The preview and the animation use made-up agents and terminals. They are rendered from `art/preview.html`, a sample-data copy of the window that follows the mods' sizes and colors.
+The preview and the animation use made-up agents and terminals. They are rendered by `art/render.mjs` from `art/preview.html`, a sample-data copy of the window that follows the mods' sizes and colors.
 
 ## Add it
 

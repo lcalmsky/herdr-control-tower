@@ -16,9 +16,9 @@ Left to right, then top to bottom:
   - A dashed centre line from 148 px to 16 px before the right edge: 16 px dashes, 12 px gaps, 1 px, `#272c37`.
   - An empty runway shows "No aircraft" (Nunito 12 px semibold, `#7a8296`) at its right end.
 - **Aircraft**: a 26 px plane (side view, nose right) then, 8 px later, a 240 × 64 controller tag (radius 8, `#1a1e28`, 1 px `#1d212b` hairline, 12 px side and 8 px vertical padding) with three 16 px rows:
-  1. the session name (Nunito 14 px bold, `#eef0f5`, up to 140 px), the space name (Nunito 12 px semibold, `#7a8296`) and the time since the status changed (Geist Mono 12 px, `#7a8296`: `<1m`, `5m`, `2h`, `1d`);
+  1. the session name (Nunito 14 px bold, `#eef0f5`, taking the rest of the row) and the time since the status changed (Geist Mono 12 px, `#7a8296`: `<1m`, `5m`, `2h`, `1d`);
   2. an 11 px spinner (working only) and what it's doing (Geist Mono 12 px, `#a3a9b8`);
-  3. a 2 px context bar (`#1d212b` track, `#a3a9b8` fill) and the percentage (Geist Mono 12 px, `#7a8296`; `–` when unknown).
+  3. the space name (Nunito 12 px semibold, `#7a8296`, taking the rest of the row), a 72 px wide 2 px context bar (`#1d212b` track, `#a3a9b8` fill) and the percentage (Geist Mono 12 px, `#7a8296`; `–` when unknown).
   Planes are `#7a8296`; a waiting (TOWER) plane is red and its tag border is red at 50 %. Aircraft on one runway line up from the left, 298 px apart, starting 156 px into the card.
 - **Tab bar** (38 px): Herdr's tabs, except an unnamed tab shows its agent's session name instead of its number.
 - **Work area**: padding 8, gap 8. Each pane is a card with radius 10, a 1 px `border` (1 px `accent`, amber, when focused) and Herdr's 30 px pane header.
