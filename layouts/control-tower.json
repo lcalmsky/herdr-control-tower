@@ -1,0 +1,123 @@
+{
+  "id": "root",
+  "type": "row",
+  "theme": "control-tower",
+  "background": "canvas",
+  "terminal_padding": [
+    14,
+    12
+  ],
+  "titlebar": "none",
+  "traffic_lights": [
+    12,
+    16
+  ],
+  "divider": {
+    "width": 1,
+    "color": "border"
+  },
+  "children": [
+    {
+      "id": "rail",
+      "type": "block",
+      "size": {
+        "px": 64
+      },
+      "resizable": false,
+      "window_drag": true,
+      "background": "chrome",
+      "content": {
+        "mod": "tower-rail"
+      }
+    },
+    {
+      "id": "work",
+      "type": "column",
+      "resizable": false,
+      "children": [
+        {
+          "id": "tower-head",
+          "type": "block",
+          "size": {
+            "px": 44
+          },
+          "window_drag": true,
+          "content": {
+            "mod": "tower",
+            "props": {
+              "role": "head"
+            }
+          }
+        },
+        {
+          "id": "tower-lanes",
+          "type": "block",
+          "size": {
+            "px": 384
+          },
+          "content": {
+            "mod": "tower"
+          }
+        },
+        {
+          "id": "tabs",
+          "type": "block",
+          "content": {
+            "mod": "tower-tabs"
+          },
+          "size": {
+            "px": 38
+          },
+          "window_drag": false
+        },
+        {
+          "id": "work-body",
+          "type": "row",
+          "padding": 8,
+          "gap": 8,
+          "children": [
+            {
+              "id": "main",
+              "type": "block",
+              "content": {
+                "tab": "active",
+                "pane": {
+                  "header": {
+                    "content": {
+                      "mod": "pane"
+                    },
+                    "reveal": "always",
+                    "height": 30,
+                    "position": "top"
+                  },
+                  "background": "background",
+                  "border": {
+                    "width": 1,
+                    "color": "border"
+                  },
+                  "focus": {
+                    "width": 1,
+                    "color": "accent"
+                  },
+                  "radius": 10,
+                  "gap": 8,
+                  "lone": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "status",
+          "type": "block",
+          "content": {
+            "mod": "workspace-status"
+          },
+          "size": {
+            "px": 28
+          }
+        }
+      ]
+    }
+  ]
+}
