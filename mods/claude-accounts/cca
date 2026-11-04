@@ -7,6 +7,7 @@ set -u
 TOWER="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower"
 STATE="$TOWER/usage"
 CURRENT="$TOWER/current"
+LABELS="$TOWER/labels"
 SHARED="projects history.jsonl file-history todos plans tasks teams paste-cache session-env sessions"
 
 die() { printf 'cca: %s\n' "$*" >&2; exit 1; }
@@ -51,6 +52,28 @@ current_default() {
     [ -n "$name" ] && [ -d "$HOME/.claude-accounts/$name" ] || name=
   fi
   printf '%s\n' "${name:-default}"
+}
+
+# The label shown in place of an account's name; absent reads as no label.
+label_of() {
+  [ -r "$LABELS" ] || return 1
+  v=$(awk -F '\t' -v n="$1" '$1 == n { print $2; exit }' "$LABELS" 2>/dev/null)
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
+
+# "label (name)" when the account has a label, else the name.
+display_name() {
+  l=$(label_of "$1") && { printf '%s (%s)\n' "$l" "$1"; return; }
+  printf '%s\n' "$1"
+}
+
+# A label is 1-24 printable characters and never holds a tab or newline.
+valid_label() {
+  [ -n "$1" ] || return 1
+  case "$1" in *[[:cntrl:]]*) return 1 ;; esac
+  [ "${#1}" -le 24 ] || return 1
+  return 0
 }
 
 email() {
@@ -227,7 +250,7 @@ cmd_ls() {
   printf '%s  %-11.11s %-21.21s %-11.11s %-11.11s%s\n' "$DIM" "NAME" "EMAIL" "5H" "7D" "$OFF"
   row() {
     printf '%s%-1.1s%s ' "$AMBER" "$3" "$OFF"
-    printf '%s%-11.11s%s ' "$BOLD" "$1" "$OFF"
+    printf '%s%-11s%s ' "$BOLD" "$(display_name "$1")" "$OFF"
     printf '%s%-21.21s%s ' "$DIM" "$2" "$OFF"
     printf '%s' "$4"; usage_cell "$1" five_hour 11; printf '%s ' "$OFF"
     printf '%s' "$DIM"; usage_cell "$1" seven_day 11; printf '%s\n' "$OFF"
@@ -259,7 +282,7 @@ cmd_ls() {
   done
   printf '\n'
   if [ -n "$best_name" ]; then
-    printf 'Most 5h headroom: %s%s%s\n' "$BOLD" "$best_name" "$OFF"
+    printf 'Most 5h headroom: %s%s%s\n' "$BOLD" "$(display_name "$best_name")" "$OFF"
   else
     printf 'Most 5h headroom: –\n'
   fi
@@ -271,6 +294,11 @@ usage_line() {
   five=$(grep -o '"five_hour":{[^}]*}' "$f" 2>/dev/null | head -n 1)
   seven=$(grep -o '"seven_day":{[^}]*}' "$f" 2>/dev/null | head -n 1)
   printf 'U\t%s\t%s\t%s\t%s\t%s\n' "$1" "$(val "$five" used)" "$(val "$five" resets_at)" "$(val "$seven" used)" "$(val "$seven" resets_at)"
+}
+
+porcelain_label() {
+  l=$(label_of "$1") || return 0
+  printf 'L\t%s\t%s\n' "$1" "$l"
 }
 
 cmd_porcelain() {
@@ -285,12 +313,14 @@ cmd_porcelain() {
   printf 'C\t%s\n' "$cur"
   printf 'D\t%s\n' "$(current_default)"
   printf 'A\tdefault\t%s\n' "$(email "$HOME/.claude.json")"
+  porcelain_label default
   usage_line default
   for d in "$HOME"/.claude-accounts/*/; do
     d=${d%/}
     [ -d "$d" ] && [ "${d##*/}" != default ] || continue
     valid_name "${d##*/}" || continue
     printf 'A\t%s\t%s\n' "${d##*/}" "$(email "$d/.claude.json")"
+    porcelain_label "${d##*/}"
     usage_line "${d##*/}"
   done
   if [ -n "$pid" ]; then
@@ -452,6 +482,31 @@ cmd_use() {
   printf '%s\n' "$name"
 }
 
+# Sets the display label shown in place of the name; an empty label removes it. The folder never
+# changes, so a running session keeps its login. Exit 2: bad label, 3: no such account.
+cmd_porcelain_rename() {
+  name=${1:-}
+  label=$(printf '%s' "${2-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  if [ "$name" != default ]; then
+    { valid_name "$name" && [ -d "$HOME/.claude-accounts/$name" ]; } || die_as 3 "No account $name."
+  fi
+  if [ -n "$label" ]; then
+    valid_label "$label" || die_as 2 "A label is 1 to 24 characters, with no tabs or newlines."
+  fi
+  mkdir -p "$TOWER" || die_as 1 "Could not create $TOWER."
+  tmp="$TOWER/.labels.$$"
+  {
+    if [ -r "$LABELS" ]; then
+      awk -F '\t' -v n="$name" '$1 != n' "$LABELS"
+    fi
+    if [ -n "$label" ]; then
+      printf '%s\t%s\n' "$name" "$label"
+    fi
+  } > "$tmp" || { rm -f "$tmp"; die_as 1 "Could not write $LABELS."; }
+  mv "$tmp" "$LABELS" || { rm -f "$tmp"; die_as 1 "Could not write $LABELS."; }
+  printf '%s\n' "${label:-$name}"
+}
+
 # The shell hook: an interactive shell turns a bare `claude` into the global default account.
 # It reads the choice file with the builtin `read` and starts no other process.
 cmd_shell_init() {
@@ -510,6 +565,7 @@ case "${1:-}" in
   shell-init) cmd_shell_init ;;
   --porcelain) shift; cmd_porcelain "${1:-}" ;;
   --porcelain-add) shift; cmd_porcelain_add "${1:-}" ;;
+  --porcelain-rename) shift; cmd_porcelain_rename "${1:-}" "${2-}" ;;
   --*) die "unknown option $1" ;;
   *) cmd_run "$@" ;;
 esac

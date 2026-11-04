@@ -1,16 +1,17 @@
-// Claude accounts for Herdr: a chip naming the account of the focused Claude Code
-// agent, and a popup that opens any account in a new tab, resumes this session
-// under another account, or makes a new account. The shell work lives in `cca`.
-// props().role: "chip" draws the chip, "menu" (or none, as mod.open gives) the
-// accounts popup, and mode "add" the add form.
+// Claude accounts for Herdr: the head shows a 5h and 7d gauge for every account, then a chip
+// naming the focused agent's account. The chip's popup picks the account new sessions start
+// under, renames accounts in place, resumes this session under another account, or makes a new
+// account. The shell work lives in `cca`.
+// props().role: "chip" draws the head, "rail" one ringed avatar per account for the bottom of a
+// side rail, "menu" (or none, as mod.open gives) the accounts popup, and mode "add" the add form.
 
-import { View, div } from "gpui-kit";
+import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, terminals, focused, run, exec, props, appHome, openOverlay, closeOverlay } from "herdr";
 
 const INK = {
   card: "#11141c", raised: "#1a1e28", selected: "#161a24", line: "#1d212b",
-  t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b",
+  t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b", red: "#e5484d", ring: "#3a404e", track: "#343a48",
 };
 const FONT = "Nunito";
 
@@ -22,8 +23,30 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // Herdr has no API for a mod's own folder; the app home is where Herdr keeps mods.
 const cca = () => `${appHome()}/mods/claude-accounts/cca`;
 
+// The display label cca keeps for an account, falling back to the account name.
+const display = (a) => a?.label || a?.name || "";
+
+// Herdr's JS engine ignores toLocaleDateString's weekday option and prints the whole date.
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 // A rate-limit window past its reset time is spent: it counts as 0 % and has no reset time to show.
 const liveWindow = (w) => (w?.reset && w.reset * 1000 <= Date.now() ? { used: 0, reset: null } : w);
+
+// Clock time within a day, else the weekday.
+const resetLabel = (at) => {
+  const d = new Date(at * 1000);
+  return d - Date.now() < 86400000
+    ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
+    : WEEKDAYS[d.getDay()];
+};
+
+// A clockwise arc from 12 o'clock on a 40 px square; a whole circle is two half arcs.
+function arcPath(r, frac, width) {
+  const p = PathBuilder.stroke(width).move_to(20, 20 - r);
+  if (frac >= 0.999) return p.arc_to(r, r, 0, false, true, 20, 20 + r).arc_to(r, r, 0, false, true, 20, 20 - r).build();
+  const a = frac * 2 * Math.PI;
+  return p.arc_to(r, r, 0, frac > 0.5, true, 20 + r * Math.sin(a), 20 - r * Math.cos(a)).build();
+}
 
 export default class ClaudeAccounts extends View {
   init(_props, cx) {
@@ -34,7 +57,11 @@ export default class ClaudeAccounts extends View {
     this.globalDefault = p.globalDefault ?? "default";
     this.session = p.session ?? null;
     this.readError = p.error ?? null;
-    if (this.role !== "chip" && p.mode === "add") {
+    this.hover = null;
+    this.rename = null;
+    this.renameError = null;
+    this.actionError = null;
+    if (this.role === "menu" && p.mode === "add") {
       this.cx = cx;
       this.input = InputState.new({ value: "" });
       this.input.on("change", (_e, cx) => { this.error = null; cx.notify(); });
@@ -43,6 +70,7 @@ export default class ClaudeAccounts extends View {
       cx.timer.after(600, () => this.input.focus());
       return;
     }
+    if (this.role === "menu") this.handle = cx.focus_handle();
     cx.timer.every(30000, (cx) => this.readAccounts(cx));
     this.readAccounts(cx);
   }
@@ -63,6 +91,7 @@ export default class ClaudeAccounts extends View {
     this.readingAccounts = true;
     cx.spawn(async (cx) => {
       const accounts = [];
+      const labels = {};
       let current = "default";
       let globalDefault = "default";
       let session = null;
@@ -71,22 +100,24 @@ export default class ClaudeAccounts extends View {
         r = await exec("sh", this.focusKey ? [cca(), "--porcelain", this.focusKey] : [cca(), "--porcelain"]);
         const byName = {};
         for (const line of (r.stdout ?? "").split("\n")) {
-          const [kind, name, mail] = line.split("\t");
+          const [kind, name, value] = line.split("\t");
           if (kind === "C" && name) current = name;
           if (kind === "D" && ACCOUNT_NAME.test(name ?? "")) globalDefault = name;
           if (kind === "A" && ACCOUNT_NAME.test(name ?? "")) {
-            const a = { name, email: (mail ?? "").trim(), usage: null };
+            const a = { name, email: (value ?? "").trim(), usage: null, label: null };
             byName[name] = a;
             accounts.push(a);
           }
+          if (kind === "L" && name && (value ?? "").trim()) labels[name] = value.trim();
           if (kind === "U" && byName[name]) {
             const f = line.split("\t");
             const win = (u, at) => /^\d+(\.\d+)?$/.test(u ?? "")
               ? { used: Number(u), reset: /^\d+$/.test(at ?? "") ? Number(at) : null } : null;
             byName[name].usage = { five: win(f[2], f[3]), seven: win(f[4], f[5]) };
           }
-          if (kind === "S" && SESSION_ID.test(name ?? "")) session = { id: name, cwd: (mail ?? "").trim() };
+          if (kind === "S" && SESSION_ID.test(name ?? "")) session = { id: name, cwd: (value ?? "").trim() };
         }
+        for (const a of accounts) a.label = labels[a.name] ?? null;
       } catch {}
       this.readingAccounts = false;
       if (accounts.length) {
@@ -105,7 +136,7 @@ export default class ClaudeAccounts extends View {
     });
   }
 
-  // Opens the chosen account's Claude Code in a new tab; running agents keep their own account.
+  // Opens the chosen account's Claude Code in a pane beside the focused one; running agents keep their own account.
   openAgent(name) {
     if (!ACCOUNT_NAME.test(name)) return;
     // The default account runs with CLAUDE_CONFIG_DIR unset: set to ~/.claude, Claude Code would read
@@ -114,7 +145,7 @@ export default class ClaudeAccounts extends View {
     const env = name === "default"
       ? "unset CLAUDE_CONFIG_DIR; CCA_ACCOUNT=default"
       : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}" CCA_ACCOUNT=${name}`;
-    run("tab.new", { name: name === "default" ? "claude" : name, argv: ["sh", "-lc", `${env} exec claude`] });
+    run("pane.split", { direction: "right", argv: ["sh", "-lc", `${env} exec claude`] });
   }
 
   addAccount() {
@@ -145,31 +176,82 @@ export default class ClaudeAccounts extends View {
       .text_size(font).font_family(FONT).font_bold().text_color(INK.t1).child([...(name || "?")][0]?.toUpperCase() ?? "?");
   }
 
+  radio(on) {
+    return h_flex().size(12).flex_none().rounded(6).border(1.5).border_color(on ? INK.amber : INK.ring)
+      .items_center().justify_center()
+      .when(on, (el) => el.child(div().size(6).rounded(3).bg(INK.amber)));
+  }
+
   accountChip() {
     const name = this.current ?? "default";
-    const label = this.readError ? "?" : name;
+    const label = this.readError ? "?" : display(this.accounts.find((a) => a.name === name)) || name;
     return h_flex().id("head-accounts").h(26).flex_none().items_center().gap(6).pl(3).pr(10).rounded(13)
       .bg(INK.card).border(1).border_color(INK.line)
       .hover((h) => h.bg(INK.selected)).cursor_pointer().tooltip(this.readError ?? "Claude accounts")
-      .on_click(() => {
-        const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "", usage: null }];
-        const resume = this.session ? list.filter((a) => a.name !== name) : [];
-        const section = resume.length ? 18 + resume.length * 26 : 0;
-        openOverlay({ mod: "claude-accounts", kind: "popup", width: 260,
-          height: this.readError ? 80 : 67 + list.length * 38 + section,
-          props: { role: "menu", current: name, globalDefault: this.globalDefault ?? "default",
-            accounts: list, session: this.session, error: this.readError ?? null } });
-      })
+      .on_click(() => this.openMenu())
       .child(this.avatar(label, 20, 11))
       .child(div().text_size(13).font_family(FONT).font_weight(600).text_color(INK.t1).child(label))
       .child(div().text_size(10).font_family(FONT).text_color(INK.t3).child("▾"));
+  }
+
+  openMenu() {
+    const name = this.current ?? "default";
+    const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "", usage: null }];
+    const resume = this.session ? list.filter((a) => a.name !== name) : [];
+    openOverlay({ mod: "claude-accounts", kind: "popup", width: 300,
+      height: this.readError ? 80 : this.menuHeight(list.length, resume.length),
+      props: { role: "menu", current: name, globalDefault: this.globalDefault ?? "default",
+        accounts: list, session: this.session, error: this.readError ?? null } });
+  }
+
+  // The popup grows by whole rows, so its height is known before it opens; the last 18 px hold
+  // the rename hint or a failure line, because an overlay cannot be resized after opening.
+  menuHeight(count, resumeCount) {
+    return 12 + 24 + count * 44 + (resumeCount ? 13 + 24 + resumeCount * 32 : 0) + 13 + 32 + 18;
   }
 
   // The block is as wide as the layout says; the chip keeps its place at the right end of the head.
   chip(cx) {
     const pid = this.focusedPid();
     if ((pid == null ? "" : String(pid)) !== this.focusKey) this.readAccounts(cx, pid);
-    return h_flex().size_full().items_center().justify_end().pr(20).child(this.accountChip());
+    const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "", usage: null }];
+    const groups = [];
+    for (const a of list) {
+      if (groups.length) groups.push(div().w(1).h(16).flex_none().bg(INK.line));
+      groups.push(this.accountGauges(a));
+    }
+    return h_flex().size_full().items_center().justify_end().pr(20).gap(16)
+      .children(groups)
+      .child(this.accountChip());
+  }
+
+  accountGauges(a) {
+    const me = a.name === this.current;
+    return h_flex().flex_none().items_center().gap(8)
+      .child(div().flex_none().text_size(12).font_family(FONT).font_bold().text_color(me ? INK.t1 : INK.t3).child(display(a)))
+      .child(this.gauge(a, "5h", a.usage?.five))
+      .child(this.gauge(a, "7d", a.usage?.seven));
+  }
+
+  // One rate-limit window as a fuel gauge: a 44 px bar with quarter ticks, the percentage and,
+  // from 90 %, the reset time in red (clock time within a day, else the weekday).
+  gauge(a, label, raw) {
+    const w = liveWindow(raw);
+    const pct = w ? Math.min(100, Math.round(w.used)) : null;
+    const hot = pct != null && pct >= 90;
+    const when = w?.reset ? resetLabel(w.reset) : null;
+    return h_flex().flex_none().gap(4).items_center()
+      .tooltip(`${display(a)} ${label} window${pct == null ? ": no usage yet" : ` ${pct}% used`}`)
+      .child(div().text_size(11).font_family(FONT).font_bold().text_color(INK.t3).child(label))
+      .child(div().relative().w(44).h(4).rounded(2).bg(INK.line).overflow_hidden()
+        .child(div().absolute().left(0).top(0).bottom(0).w(Math.round(((pct ?? 0) / 100) * 44)).rounded(2)
+          .bg(hot ? INK.red : INK.t2))
+        .children([11, 22, 33].map((x) => div().absolute().left(x).top(0).bottom(0).w(1).bg("#07080d"))))
+      .child(div().flex_none().text_size(12).font_family("Geist Mono")
+        .text_color(hot ? INK.red : a.name === this.current ? INK.t1 : INK.t2)
+        .child(pct == null ? "–" : `${pct}%`))
+      .when(Boolean(hot && when), (el) => el.child(div().flex_none().text_size(12).font_family("Geist Mono")
+        .text_color(INK.t3).child(`↻ ${when}`)));
   }
 
   // The account's current rate-limit windows: "5h 12% · 7d 9%", the 5h percentage red at the limit,
@@ -181,7 +263,7 @@ export default class ClaudeAccounts extends View {
       if (!w) continue;
       const pct = Math.round(w.used);
       if (parts.length) parts.push(mono(" · "));
-      parts.push(mono(`${label} `), mono(`${pct}%`, label === "5h" && pct >= 100 ? "#e5484d" : INK.t3));
+      parts.push(mono(`${label} `), mono(`${pct}%`, label === "5h" && pct >= 100 ? INK.red : INK.t3));
       if (w.used >= 90 && w.reset) {
         const d = new Date(w.reset * 1000);
         parts.push(mono(` ↻${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`));
@@ -190,69 +272,196 @@ export default class ClaudeAccounts extends View {
     return parts.length ? h_flex().items_center().children(parts) : mono("no usage yet");
   }
 
-  // Resumes the focused agent's session under another account; the old tab keeps running.
+  // A 40 px avatar per account, stacked from the bottom: one ring per rate-limit window, the 5h
+  // window outside. Every track is drawn in full so each avatar keeps the same outer edge; the
+  // letter is bright only on the account new sessions open as.
+  rail(cx) {
+    const pid = this.focusedPid();
+    if ((pid == null ? "" : String(pid)) !== this.focusKey) this.readAccounts(cx, pid);
+    const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "", usage: null }];
+    return v_flex().size_full().items_center().justify_end().gap(8).pb(8)
+      .children(list.map((a) => this.ringAvatar(a)));
+  }
+
+  ringAvatar(a) {
+    const windows = [["5h", a.usage?.five], ["7d", a.usage?.seven]].map(([label, raw]) => [label, liveWindow(raw)]);
+    const three = windows.length >= 3;
+    const width = three ? 2.5 : 3;
+    const step = three ? 3.5 : 4.5;
+    // The outermost ring touches the 40 px edge whatever the ring count; more rings go inward.
+    const outer = 20 - width / 2;
+    const core = outer - (windows.length - 1) * step - width / 2 - (three ? 1.5 : 2);
+    const rings = [];
+    windows.forEach(([, w], i) => {
+      const r = outer - i * step;
+      const pct = w ? Math.min(100, Math.max(0, w.used)) : 0;
+      rings.push(window.paint_path(arcPath(r, 1, width), INK.track).absolute().top(0).left(0).size(40));
+      if (pct > 0) {
+        rings.push(window.paint_path(arcPath(r, pct / 100, width), pct >= 90 ? INK.red : INK.t2)
+          .absolute().top(0).left(0).size(40));
+      }
+    });
+    const tip = [display(a), ...windows.map(([label, w]) => {
+      if (!w) return `${label} –`;
+      const pct = Math.round(w.used);
+      return pct >= 90 && w.reset ? `${label} ${pct}% ↻ ${resetLabel(w.reset)}` : `${label} ${pct}%`;
+    })].join(" · ");
+    const bright = a.name === (this.globalDefault ?? "default");
+    return div().id(`rail-acct-${a.name}`).relative().size(40).flex_none().rounded(20).cursor_pointer()
+      .tooltip(this.readError ?? (bright ? `${tip} · new sessions` : tip))
+      .on_click(() => this.openMenu())
+      .children(rings)
+      .child(div().absolute().top(20 - core).left(20 - core).size(core * 2).rounded(core).bg(INK.raised)
+        .hover((h) => h.bg(INK.selected))
+        .flex().items_center().justify_center()
+        .text_size(three ? 9 : 11).font_semibold().text_color(bright ? INK.t1 : INK.t3)
+        .child([...(display(a) || "?")][0]?.toUpperCase() ?? "?"));
+  }
+
+  // Resumes the focused agent's session under another account in a new pane; the old one keeps running.
   continueAs(name, session) {
     if (!ACCOUNT_NAME.test(name) || !SESSION_ID.test(session?.id ?? "") || !session?.cwd) return;
     const env = name === "default"
       ? "unset CLAUDE_CONFIG_DIR; CCA_ACCOUNT=default"
       : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}" CCA_ACCOUNT=${name}`;
-    run("tab.new", { name, folder: session.cwd, argv: ["sh", "-lc", `${env} exec claude --resume ${session.id}`] });
+    // pane.split takes no folder, so the shell changes into the session's cwd first.
+    const cwd = `'${session.cwd.replace(/'/g, "'\\''")}'`;
+    run("pane.split", { direction: "right", argv: ["sh", "-lc", `cd ${cwd} && ${env} exec claude --resume ${session.id}`] });
+  }
+
+  // Makes the account new sessions start under; the popup stays open so the radio follows.
+  useAccount(name, cx) {
+    if (!ACCOUNT_NAME.test(name) || this.usingAccount) return;
+    this.usingAccount = true;
+    this.actionError = null;
+    cx.spawn(async (cx) => {
+      let r = null;
+      try { r = await exec("sh", [cca(), "use", name]); } catch {}
+      this.usingAccount = false;
+      if (!r || r.code !== 0) {
+        this.actionError = ((r?.stderr || r?.stdout) ?? "").trim() || "Could not change the default account.";
+        cx.notify();
+        return;
+      }
+      this.readAccounts(cx);
+      cx.notify();
+    });
+  }
+
+  startRename(a, cx) {
+    this.actionError = null;
+    this.renameError = null;
+    this.hover = null;
+    const input = InputState.new({ value: display(a) });
+    input.on("submit", (_e, cx) => this.saveRename(cx));
+    this.rename = { name: a.name, input };
+    input.focus();
+    cx.timer.after(300, () => { if (this.rename?.input === input) input.focus(); });
+    cx.notify();
+  }
+
+  saveRename(cx) {
+    const r = this.rename;
+    if (!r || this.savingRename) return;
+    const value = (r.input.value() ?? "").trim();
+    this.savingRename = true;
+    this.renameError = null;
+    cx.spawn(async (cx) => {
+      let res = null;
+      try { res = await exec("sh", [cca(), "--porcelain-rename", r.name, value]); } catch {}
+      this.savingRename = false;
+      if (!res || res.code !== 0) {
+        this.renameError = ((res?.stderr || res?.stdout) ?? "").trim() || "Could not rename the account.";
+        cx.notify();
+        return;
+      }
+      this.rename = null;
+      this.readAccounts(cx);
+      cx.notify();
+    });
   }
 
   accountsMenu() {
     if (this.readError) {
-      return v_flex().id("accounts-menu").w_full().h_full().min_h(0).p(5).overflow_y_scroll()
-        .child(div().px(8).py(6).text_size(11).font_family(FONT).text_color("#e5484d").child(this.readError));
+      return v_flex().id("accounts-menu").w_full().h_full().min_h(0).p(6).overflow_y_scroll()
+        .child(div().px(8).py(6).text_size(11).font_family(FONT).text_color(INK.red).child(this.readError));
     }
     const cur = this.current ?? "default";
     const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "", usage: null }];
     const resume = this.session ? list.filter((a) => a.name !== cur) : [];
-    const fiveUsed = (a) => liveWindow(a.usage?.five)?.used;
-    const best = list.reduce((m, a) => {
-      const used = fiveUsed(a);
-      return used != null && (m == null || used < m) ? used : m;
-    }, null);
-    const row = (a) => v_flex().id(`acct-${a.name}`).h(38).px(8).rounded(6).justify_center().gap(1).cursor_pointer()
-      .hover((h) => h.bg(INK.selected)).tooltip(`Open ${a.name} in a new tab`)
-      .on_click(() => { closeOverlay(props().overlay); this.openAgent(a.name); })
-      .child(h_flex().h(18).gap(8).items_center().min_w(0)
-        .child(div().w(10).flex_none().text_size(11).font_family(FONT).text_color(INK.amber).child(a.name === cur ? "✓" : ""))
-        .child(this.avatar(a.name, 18, 9))
-        .child(div().flex_none().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t1).child(a.name))
-        .when(fiveUsed(a) != null && fiveUsed(a) === best,
-          (el) => el.child(div().size(5).flex_none().rounded(3).bg(INK.amber).tooltip("Most 5h headroom")))
-        .child(h_flex().flex_1().min_w(0).justify_end()
-          .child(div().truncate().text_size(10.5).font_family("Geist Mono").text_color(INK.t3).child(a.email || "not signed in"))))
-      .child(h_flex().w_full().min_w(0).items_center()
-        .child(div().w(36).flex_none())
-        .when(a.name === (this.globalDefault ?? "default"),
-          (el) => el.child(div().flex_none().text_size(10).font_family("Geist Mono").text_color(INK.t3).child("default for new")))
-        .child(h_flex().flex_1().min_w(0).justify_end().child(this.usageLine(a))));
-    const resumeRow = (a) => h_flex().id(`cont-${a.name}`).h(26).px(8).rounded(6).gap(8).items_center().cursor_pointer()
-      .hover((h) => h.bg(INK.selected)).tooltip(`Resume this session as ${a.name}`)
+    const accountRow = (a) => {
+      const isDefault = a.name === (this.globalDefault ?? "default");
+      if (this.rename?.name === a.name) {
+        return v_flex().id(`acct-${a.name}`).w_full().flex_none()
+          .child(h_flex().h(44).px(8).rounded(8).gap(8).items_center().bg(INK.selected)
+            .child(div().w(14).flex_none().flex().justify_center().child(this.radio(isDefault)))
+            .child(this.avatar(display(a), 20, 10))
+            .child(Input.new(this.rename.input).h(28).flex_1().min_w(0).rounded(6).border(1)
+              .border_color("#f2a93b80").bg(INK.raised).text_size(13).font_family(FONT).font_bold()
+              .text_color(INK.t1)))
+          .child(div().h(18).pl(50).pr(8).flex().items_center().text_size(10).font_family("Geist Mono")
+            .text_color(this.renameError ? INK.red : INK.t3).child(this.renameError ?? "↩ save · esc cancel"));
+      }
+      const hovered = this.hover === a.name;
+      return h_flex().id(`acct-${a.name}`).h(44).flex_none().px(8).rounded(8).gap(8).items_center().cursor_pointer()
+        .hover((h) => h.bg(INK.selected))
+        .on_hover((on, cx) => {
+          if (on) this.hover = a.name;
+          else if (this.hover === a.name) this.hover = null;
+          cx.notify();
+        })
+        .tooltip(`New sessions open as ${display(a)}`)
+        .on_click((_e, cx) => { if (!this.rename) this.useAccount(a.name, cx); })
+        .child(div().w(14).flex_none().flex().justify_center().child(this.radio(isDefault)))
+        .child(this.avatar(display(a), 20, 10))
+        .child(v_flex().flex_1().min_w(0).gap(2)
+          .child(h_flex().gap(8).items_center().min_w(0)
+            .child(div().flex_none().text_size(13).font_family(FONT).font_bold().text_color(INK.t1).child(display(a)))
+            .when(a.name === cur, (el) => el.child(div().flex_none().text_size(10).font_family("Geist Mono")
+              .text_color(INK.t3).child("this pane"))))
+          .child(div().truncate().text_size(11).font_family("Geist Mono").text_color(INK.t3).child(a.email || "not signed in")))
+        .child(h_flex().flex_none().items_center()
+          .when(!hovered, (el) => el.child(this.usageLine(a)))
+          .when(hovered, (el) => el.child(h_flex().id(`pen-${a.name}`).size(16).flex_none().items_center()
+            .justify_center().cursor_pointer()
+            .on_click((_e, cx) => { cx.stop_propagation(); this.startRename(a, cx); })
+            .child(svg("mods/claude-accounts/pencil.svg").size(16).flex_none().text_color(INK.t3)))));
+    };
+    const resumeRow = (a) => h_flex().id(`cont-${a.name}`).h(32).flex_none().px(8).rounded(8).gap(8).items_center().cursor_pointer()
+      .hover((h) => h.bg(INK.selected)).tooltip(`Resume this session as ${display(a)}`)
       .on_click(() => { closeOverlay(props().overlay); this.continueAs(a.name, this.session); })
-      .child(div().w(10).flex_none())
-      .child(this.avatar(a.name, 16, 8))
-      .child(div().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t2).child(a.name))
-      .child(h_flex().flex_1().justify_end()
-        .child(div().text_size(10).font_family("Geist Mono").text_color(INK.t3).child("resume")));
-    return v_flex().id("accounts-menu").w_full().h_full().min_h(0).p(5).overflow_y_scroll()
-      .child(div().h(18).px(8).flex().items_center().text_size(10).font_family(FONT).font_bold().text_color(INK.t3)
-        .child("OPEN IN A NEW TAB"))
-      .children(list.map(row))
-      .child(div().h(1).mx(2).my(4).bg(INK.line))
+      .child(div().w(14).flex_none())
+      .child(this.avatar(display(a), 20, 10))
+      .child(div().flex_1().min_w(0).truncate().text_size(13).font_family(FONT).font_bold().text_color(INK.t2).child(display(a)))
+      .child(div().flex_none().text_size(11).font_family("Geist Mono").text_color(INK.t3).child("resume in pane"));
+    return v_flex().id("accounts-menu").w_full().h_full().min_h(0).p(6).track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape" && this.rename) {
+          this.rename = null;
+          this.renameError = null;
+          this.handle.focus();
+          cx.stop_propagation();
+          cx.notify();
+        }
+      })
+      .child(div().h(24).px(8).flex().items_center().text_size(11).font_family(FONT).font_weight(600).text_color(INK.t3)
+        .child("New sessions open as"))
+      .children(list.map(accountRow))
+      .when(Boolean(this.actionError), (el) => el.child(div().h(18).px(8).flex().items_center().text_size(11)
+        .font_family(FONT).text_color(INK.red).child(this.actionError)))
       .when(resume.length > 0, (el) => el
-        .child(div().h(18).px(8).flex().items_center().text_size(10).font_family(FONT).font_weight(600).text_color(INK.t3)
+        .child(div().h(1).mx(2).my(6).bg(INK.line))
+        .child(div().h(24).px(8).flex().items_center().text_size(11).font_family(FONT).font_weight(600).text_color(INK.t3)
           .child("Continue this session as"))
         .children(resume.map(resumeRow)))
-      .child(h_flex().id("acct-add").h(30).px(8).rounded(6).gap(8).items_center().cursor_pointer()
+      .child(div().h(1).mx(2).my(6).bg(INK.line))
+      .child(h_flex().id("acct-add").h(32).flex_none().pl(30).pr(8).rounded(8).items_center().cursor_pointer()
         .hover((h) => h.bg(INK.selected))
         .on_click(() => {
           closeOverlay(props().overlay);
           openOverlay({ mod: "claude-accounts", kind: "popup", width: 260, height: 170,
             props: { mode: "add" } });
         })
-        .child(div().w(10).flex_none())
         .child(div().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t2).child("+ Add account…")));
   }
 
@@ -266,7 +475,7 @@ export default class ClaudeAccounts extends View {
       .child(div().text_size(11).font_family(FONT).text_color(INK.t3).child("Creates ~/.claude-accounts/<name>"))
       .child(Input.new(this.input).h(32).px(10).rounded(8).border(1).border_color(INK.line).bg(INK.raised)
         .text_size(13).text_color(INK.t1))
-      .when(Boolean(this.error), (el) => el.child(div().text_size(11).font_family(FONT).text_color("#e5484d").child(this.error)))
+      .when(Boolean(this.error), (el) => el.child(div().text_size(11).font_family(FONT).text_color(INK.red).child(this.error)))
       .child(h_flex().justify_end().gap(8)
         .child(button("acct-cancel", "Cancel", false, () => closeOverlay(props().overlay)))
         .child(button("acct-create", this.busy ? "Creating…" : "Create", true, () => this.addAccount())));
@@ -274,6 +483,7 @@ export default class ClaudeAccounts extends View {
 
   render(cx) {
     if (this.role === "chip") return this.chip(cx);
+    if (this.role === "rail") return this.rail(cx);
     return props()?.mode === "add" ? this.addAccountView() : this.accountsMenu();
   }
 }

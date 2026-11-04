@@ -14,14 +14,17 @@ Paste this into an agent running in Herdr:
 Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/lcalmsky/herdr-control-tower
 ```
 
-Before adding it, know that the `tower` mod runs programs and reads files outside its folder:
+Before adding it, know what the mods run and read outside their folders:
 
-- every 2.5 s it runs `hc read` on working and blocked agents to show what their screen says;
-- every 10 s it runs a small `sh` script that reads Claude Code's own transcripts under `~/.claude` (or `$CLAUDE_CONFIG_DIR`), then `~/.claude-accounts/*`, to show context use. Only token counts and the model name leave the script, and its one temp file (`mktemp`) is removed on exit.
+- the `pulse` mod runs `sh mods/pulse/scan.sh` every 3 s. The script reads Claude Code's session records and transcripts under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) and under each `~/.claude-accounts/*` that has a `sessions/` folder; the deadhd checklist state under `/tmp/deadhd-state` (or `$DEADHD_STATE_DIR`); page alerts under `~/.pulse/pages` (or `$PULSE_PAGES_DIR`); and the environment of the session processes through `ps eww`, for the pane, tab, workspace and Orca handle variables. It writes only a ledger cache under `${TMPDIR:-/tmp}/herdr-pulse`, and it never opens `*.key` files.
+- the `pulse` view runs `tmux` to switch a session, the Orca CLI at `/Applications/Orca.app/Contents/Resources/bin/orca`, `open` for page URLs and `open -a Orca`, and `rm -f` on the page-alert files after it opens them. Pages open in your browser.
+- `tower` reads Herdr's own agent and space state and runs no programs. `tower-rail` also reads that state; every 30 s it runs `git -C <terminal cwd> rev-parse --path-format=absolute --git-common-dir --show-toplevel` for each distinct terminal cwd, which reads git metadata outside the mod folder, and it reorders spaces with `space.move` so each repository's spaces sit together (base checkout first).
 
-The account chip in the head and its popup are the [claude-accounts](https://github.com/lcalmsky/herdr-claude-accounts) mod, shipped here as `mods/claude-accounts/`. Its README lists what it runs and reads: it executes `cca` (a `sh` script in that folder) every 30 s, which reads account emails and usage files and the focused Claude process's environment; **Add account** and `cca share` write under `~/.claude-accounts` and create the shared history entries under `~/.claude`. That mod makes no network calls.
+Pulse's focus key is not shipped with this repo. To give the panel the keyboard, add `"ctrl-alt-p": "pulse.toggle"` to the `global` section of your Herdr `keys.json`.
 
-It makes no network calls. `RECIPE.md` is the brief to build it from scratch.
+The account avatars at the bottom of the rail and their popup are the [claude-accounts](https://github.com/lcalmsky/herdr-claude-accounts) mod, shipped here as `mods/claude-accounts/`. Its README lists what it runs and reads: it executes `cca` (a `sh` script in that folder) every 30 s, which reads account emails and usage files and the focused Claude process's environment; **Add account** and `cca share` write under `~/.claude-accounts` and create the shared history entries under `~/.claude`. That mod makes no network calls.
+
+The mods themselves make no network calls. `RECIPE.md` is the brief to build it from scratch.
 
 ## Usage (optional)
 
@@ -38,4 +41,4 @@ Keep your own status line command after the tap path unchanged. The tap passes t
 
 ## License
 
-MIT for the layout, theme, `tower`, `tower-rail` and the bundled `claude-accounts` mod. `mods/tower-tabs` is modified from Herdr's shipped `tabs` mod and stays under the Apache License 2.0 (`mods/tower-tabs/LICENSE`). The bundled Nunito font is under the SIL Open Font License 1.1 (`mods/tower/fonts/OFL.txt`).
+MIT for the layout, theme, `tower`, `tower-rail`, `pulse` and the bundled `claude-accounts` mod. `mods/tower-tabs` is modified from Herdr's shipped `tabs` mod and stays under the Apache License 2.0 (`mods/tower-tabs/LICENSE`). The bundled Nunito font is under the SIL Open Font License 1.1 (`mods/tower/fonts/OFL.txt`; `mods/pulse/fonts/` holds a duplicate copy).

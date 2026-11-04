@@ -1,64 +1,107 @@
 <!DOCTYPE html>
 <!-- Sample-data rebuild of the Control Tower window, used to render preview.png and demo.gif.
-     Sizes and colors follow mods/tower and mods/tower-rail; the agents and terminals are made up. -->
+     Sizes and colors follow mods/tower, mods/tower-rail, mods/claude-accounts and mods/pulse; the agents, sessions and terminals are made up. -->
 <html><head><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0}
 html,body{background:#000}
 #win{width:1600px;height:960px;background:#0b0d14;display:flex;overflow:hidden;font-family:Geist,sans-serif;color:#eef0f5;position:relative}
 .lights{position:absolute;left:12px;top:16px;display:flex;gap:8px;z-index:5}.lights i{width:12px;height:12px;border-radius:6px}
-#rail{width:64px;flex:none;background:#07080d;border-right:1px solid #1d212b;display:flex;flex-direction:column;align-items:center;gap:8px;padding:44px 0 12px}
+#rail{width:64px;flex:none;background:#07080d;border-right:1px solid #1d212b;display:flex;flex-direction:column;align-items:center;padding:44px 0 0}
+#railcol{position:relative;width:64px;flex:none;align-self:flex-start;display:flex;flex-direction:column;align-items:center;gap:8px}
+#railacct{width:100%;height:96px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px;padding-bottom:8px}
+#railbtn{width:100%;height:84px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px;padding-bottom:12px}
 .tile{width:32px;height:32px;border-radius:8px;background:#11141c;border:1px solid #1d212b;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:500;color:#a3a9b8;position:relative}
-.tile.on{background:#1a1e28;color:#eef0f5}.tile.on::before{content:"";position:absolute;left:6px;right:6px;top:-1px;height:1px;background:#ffffff1f}
+.tile.on{background:#1a1e28;color:#f2a93b}.tile.on::before{content:"";position:absolute;left:6px;right:6px;top:-1px;height:1px;background:#ffffff1f}
 .tile .d{position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:4px;border:2px solid #07080d}
+.tile .ir{position:absolute;bottom:-3px;right:-3px;width:10px;height:10px;border-radius:5px;background:#07080d;border:1.5px solid #7a8296}
 .rb{width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:#7a8296;font-size:16px}
 #work{flex:1;min-width:0;display:flex;flex-direction:column}
 #head{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 20px}
 #head b{font:700 15px Nunito}#head span{font:600 13px Nunito;color:#7a8296}
-.chip{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 3px;border-radius:13px;background:#11141c;border:1px solid #1d212b}
-.chip .av{width:20px;height:20px;border-radius:10px;background:#1a1e28;display:flex;align-items:center;justify-content:center;font:700 11px Nunito;color:#eef0f5}
-#head .chip .nm{font:600 13px Nunito;color:#eef0f5}
-.chip .cv{font:400 10px Nunito;color:#7a8296;font-style:normal}
-#lanes{height:384px;flex:none;padding:12px}
+#lanes{height:352px;flex:none;padding:12px}
 #field{position:relative;width:100%;height:100%;overflow:hidden}
-.rw{position:absolute;left:0;right:0;height:84px;border-radius:12px;background:#11141c;border:1px solid #1d212b;overflow:hidden}
+.rw{position:absolute;left:0;right:0;height:76px;border-radius:12px;background:#11141c;border:1px solid #1d212b;overflow:hidden}
 .rw.lit{background:#161a24;border-color:#f2a93b4d}.rw.lit::before{content:"";position:absolute;left:12px;right:12px;top:0;height:1px;background:#ffffff14}
-.rw .cl{position:absolute;left:148px;right:16px;top:42px;height:1px;background:repeating-linear-gradient(90deg,#272c37 0 16px,transparent 16px 28px)}
-.lab{position:absolute;left:16px;height:84px;display:flex;flex-direction:column;justify-content:center;gap:2px}
-.lab .n{display:flex;align-items:center;gap:8px;font:800 14px Nunito}.lab .n i{width:8px;height:8px;border-radius:4px}.lab .n em{font:400 12px 'Geist Mono';font-style:normal;color:#7a8296}
-.lab .s{padding-left:16px;font:600 12px Nunito;color:#7a8296}
-.ac{position:absolute;display:flex;align-items:center;gap:8px}
-.ac svg{width:26px;height:26px;flex:none}
-.tag{width:240px;height:64px;border-radius:8px;background:#1a1e28;border:1px solid #1d212b;padding:8px 12px;display:flex;flex-direction:column;justify-content:space-between}
-.row{height:16px;line-height:16px;display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
-.row b{font:700 14px Nunito;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
-.row .sp{font:600 12px Nunito;color:#7a8296;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.row .t,.row .p{font:400 12px 'Geist Mono';color:#7a8296;flex:none}
-.row .dt{font:400 12px 'Geist Mono';color:#a3a9b8;overflow:hidden;text-overflow:ellipsis;flex:1}
-.bar{width:72px;flex:none;height:2px;background:#1d212b;border-radius:1px;position:relative}.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:1px}
+.th{position:absolute;left:132px;width:6px;height:48px;display:flex;flex-direction:column;justify-content:space-between}.th i{height:2px;border-radius:1px;background:#272c37}
+.lm{position:absolute;left:148px;right:16px;height:2px;display:flex;gap:24px;overflow:hidden}.lm i{width:2px;height:2px;border-radius:1px;flex:none}
+.cl{position:absolute;left:148px;right:16px;height:1px;background:repeating-linear-gradient(90deg,#272c37 0 16px,transparent 16px 28px)}
+.lab{position:absolute;left:16px;height:76px;display:flex;align-items:center;gap:8px;font:800 14px Nunito;color:#eef0f5}
+.lab i{width:8px;height:8px;border-radius:4px;flex:none}.lab em{font:400 12px 'Geist Mono';font-style:normal;color:#7a8296}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}.blink{animation:blink 1.2s infinite}
+.ac{position:absolute;width:200px;height:52px;display:flex;flex-direction:column;align-items:center;gap:6px}
+.plane{position:relative;width:48px;height:28px;flex:none}.plane svg{position:absolute;left:0;top:0;width:48px;height:28px}
+.nm{height:18px;max-width:200px;min-width:0;display:flex;align-items:center;gap:6px}
+.sn{font:700 12.5px/18px Nunito;color:#eef0f5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sp2:not(.spin){display:none}
 .spin{width:11px;height:11px;border-radius:50%;border:1.5px solid #a3a9b8;border-right-color:transparent;flex:none}
 #tabs{height:38px;flex:none;background:#07080d;border-bottom:1px solid #1d212b;border-top:1px solid #1d212b;display:flex;align-items:center;gap:3px;padding:0 10px}
-.tb{height:29px;padding:0 10px;border-radius:7px;display:flex;align-items:center;gap:7px;font-size:12.8px;color:#7a8296;border:1px solid transparent}
+.tb{height:29px;padding:0 10px;border-radius:7px;display:flex;align-items:center;gap:7px;font-size:12.8px;color:#7a8296;border:1px solid transparent;white-space:nowrap}
 .tb.on{background:#11141c;border-color:#1d212b;color:#eef0f5}
-.tb .dot{width:6px;height:6px;border-radius:3px}
+.tb .dot{width:6px;height:6px;border-radius:3px;flex:none}
 .tb .x{color:#7a8296;font-size:12px}
 .tb .plus{margin-left:auto}
 #body{flex:1;min-height:0;display:flex;gap:8px;padding:8px}
 .pane{flex:1;min-width:0;border-radius:10px;border:1px solid #1d212b;background:#0b0d14;display:flex;flex-direction:column;overflow:hidden}
 .pane.focus{border-color:#f2a93b}
-.ph{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;border-bottom:1px solid #1d212b}
+.ph{height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;border-bottom:1px solid #1d212b;white-space:nowrap;overflow:hidden}
 .ph b{font-weight:500}.ph span{color:#7a8296}.ph .st{margin-left:auto}
 .term{flex:1;padding:12px 14px;font:400 12px/18px 'JetBrains Mono';color:#d9dbe3;white-space:pre;overflow:hidden}
 .term .u{color:#eef0f5;background:#1a1e28;display:block;margin:0 -14px;padding:0 14px}
 .term .g{color:#4cc38a}.term .m{color:#7a8296}.term .a{color:#f2a93b}.term .r{color:#e5484d}.term .b{color:#5b9cf5}.term .w{color:#eef0f5;font-weight:700}
-#status{height:28px;flex:none;display:flex;align-items:center;gap:16px;padding:0 12px;font-size:11.5px;color:#7a8296;border-top:1px solid #1d212b;background:#07080d}
+#status{height:28px;flex:none;display:flex;align-items:center;gap:16px;padding:0 12px;font-size:11.5px;color:#7a8296;border-top:1px solid #1d212b;background:#07080d;white-space:nowrap;overflow:hidden}
+#pulse{width:380px;flex:none;background:#07080d;border-left:1px solid #1d212b;color:#eef0f5;font:400 13px Geist;display:flex;flex-direction:column;min-height:0}
+.pl-head{height:44px;flex:none;padding:0 16px;display:flex;align-items:center;gap:8px}
+.pl-head>svg{width:20px;height:20px;flex:none}
+.pl-title{font:600 15px Geist;color:#eef0f5;flex:none}
+.pl-pages{height:24px;padding:0 8px;border-radius:6px;display:flex;align-items:center;gap:6px;background:#11141c;border:1px solid #1d212b;flex:none}
+.pl-pages svg{width:12px;height:12px;flex:none;color:#a3a9b8}
+.pl-pages b{font:600 12px Geist;color:#eef0f5}
+.pl-counts{margin-left:auto;display:flex;gap:12px;flex:none}
+.pl-counts span{display:flex;gap:4px;align-items:center;font:400 12px 'Geist Mono';color:#7a8296}
+.pl-counts i{width:6px;height:6px;border-radius:3px;flex:none}
+.pl-search{margin:0 8px 4px;height:32px;flex:none;padding:0 8px;display:flex;align-items:center;gap:8px;border-radius:8px;background:#11141c;border:1px solid #1d212b;font:400 12.5px Geist;color:#7a8296}
+.pl-search svg{width:13px;height:13px;flex:none}
+.pl-list{flex:1;min-height:0;padding:0 8px 8px;overflow:hidden}
+.pl-sec{height:40px;padding:0 8px;display:flex;align-items:center;gap:8px}
+.pl-sec i{width:6px;height:6px;border-radius:3px;flex:none}
+.pl-sec b{font:600 13px Geist;color:#eef0f5}
+.pl-sec span{font:400 12px 'Geist Mono';color:#7a8296}
+.pl-card{margin-top:4px;padding:12px 8px;display:flex;align-items:flex-start;gap:8px;border-radius:8px;background:#07080d;border:1px solid transparent}
+.pl-card.sel{background:#1a1e28;border-color:#f2a93b80}
+.pl-glyph{width:16px;height:20px;flex:none;display:flex;align-items:center;justify-content:center}
+.pl-check{font:400 12px 'Geist Mono';color:#4cc38a}
+.pl-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.pl-line{display:flex;align-items:center;min-width:0}
+.pl-t{height:20px;gap:8px}
+.pl-t .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 14px Geist;color:#eef0f5}
+.pl-card.sel .pl-t .tt{color:#f2a93b}
+.pl-t .rt{flex:none;font:400 12px 'Geist Mono';color:#7a8296}
+.pl-meta{height:18px;gap:6px}
+.pl-badge{height:18px;padding:0 4px;border-radius:4px;background:#11141c;border:1px solid #272c37;display:flex;align-items:center;font:400 11px 'Geist Mono';color:#a3a9b8;flex:none}
+.pl-place{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 12px Geist;color:#7a8296}
+.pl-sep{font:400 12px 'Geist Mono';color:#3a4050;flex:none}
+.pl-tag{font:400 12px 'Geist Mono';color:#a3a9b8;flex:none}
+.pl-bg{margin-left:auto;flex:none;font:400 11px 'Geist Mono';color:#7a8296}
+.pl-now{height:18px;font:400 12px Geist;color:#a3a9b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl-answer{max-height:36px;font:400 12px/18px Geist;color:#a3a9b8;overflow:hidden}
+.pl-prog{height:16px;display:flex;align-items:center;gap:8px}
+.pl-segs{flex:1;min-width:0;display:flex;gap:2px;height:4px}
+.pl-segs i{flex:1;height:4px;border-radius:1px}
+.pl-prog b{flex:none;font:400 11px 'Geist Mono';color:#7a8296}
+.pl-actions{height:28px;display:flex;align-items:center;gap:8px}
+.pl-btn{height:28px;padding:0 8px;border-radius:6px;display:flex;align-items:center;gap:6px;background:#11141c;border:1px solid #272c37}
+.pl-btn b{font:600 12px Geist;color:#eef0f5}
+.pl-key{height:18px;min-width:18px;padding:0 4px;border-radius:4px;border:1px solid #272c37;background:#11141c;display:flex;align-items:center;justify-content:center;font:400 11px 'Geist Mono';color:#a3a9b8}
+.pl-foot{height:28px;flex:none;padding:0 16px;display:flex;align-items:center;gap:12px;border-top:1px solid #1d212b;font:400 11px 'Geist Mono';color:#7a8296}
+.pl-fill{flex:1}
 </style></head><body>
 <div id="win">
   <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
   <div id="rail"></div>
   <div id="work">
-    <div id="head"><b>acme-shop</b><span id="hc"></span><div style="flex:1"></div><div class="chip"><i class="av">D</i><b class="nm">default</b><i class="cv">▾</i></div></div>
+    <div id="head"><div style="flex:1;display:flex;align-items:center;gap:8px"><b>acme-shop</b><span id="hc" style="display:flex;align-items:center;gap:12px"></span></div></div>
     <div id="lanes"><div id="field"></div></div>
     <div id="tabs">
       <div class="tb on"><span class="spin" style="width:12px;height:12px"></span>cart-refactor<span class="x">✕</span></div>
@@ -124,6 +167,62 @@ html,body{background:#000}
     </div>
     <div id="status"><span>This computer</span><span>main</span><span id="sb"></span><span style="margin-left:auto">⌘⇧P commands</span></div>
   </div>
+  <div id="pulse">
+    <div class="pl-head">
+      <svg viewBox="0 0 20 20" fill="none"><defs><linearGradient id="pr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d8bff"/><stop offset=".5" stop-color="#9b5cff"/><stop offset="1" stop-color="#3d8bff"/></linearGradient><linearGradient id="pw" x1="4.8" y1="0" x2="15.2" y2="0" gradientUnits="userSpaceOnUse"><stop offset=".15" stop-color="#ff9f1a"/><stop offset=".5" stop-color="#3d8bff"/><stop offset=".85" stop-color="#3dd17a"/></linearGradient></defs><circle cx="10" cy="10" r="8.7" stroke="url(#pr)" stroke-width="2.6"/><path d="M4.8 10h2.9l1.4-3.7 1.8 7.5 1.4-3.8h2.9" stroke="url(#pw)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="pl-title">Pulse</span>
+      <div class="pl-pages"><svg viewBox="0 0 12 12" fill="none"><path d="M2.5 1.5h4l3 3v6h-7z" stroke="currentColor" stroke-width="1.2"/><path d="M4 6h4M4 8h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><b>1 to read</b></div>
+      <div class="pl-counts"><span><i style="background:#e5484d"></i>0</span><span><i style="background:#5b9cf5"></i>4</span><span><i style="background:#4cc38a"></i>1</span></div>
+    </div>
+    <div class="pl-search"><svg viewBox="0 0 13 13" fill="none"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.4"/><path d="M8.6 8.6 12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>Type to search</div>
+    <div class="pl-list">
+      <div class="pl-sec"><i style="background:#5b9cf5"></i><b>Working</b><span>4</span></div>
+      <div class="pl-card sel">
+        <div class="pl-glyph"><span class="spin" style="border-color:#5b9cf5;border-right-color:transparent"></span></div>
+        <div class="pl-body">
+          <div class="pl-line pl-t"><span class="tt">cart-refactor</span><span class="rt">12m</span></div>
+          <div class="pl-line pl-meta"><span class="pl-badge">herdr</span><span class="pl-place">~/code/acme-shop</span><span class="pl-sep">·</span><span class="pl-tag">ACME-412</span><span class="pl-sep">·</span><span class="pl-tag">#128</span><span class="pl-bg">1 agent</span></div>
+          <div class="pl-now">Refactoring…  Write(src/cart/total.test.ts)</div>
+          <div class="pl-prog"><div class="pl-segs"><i style="background:#4cc38a"></i><i style="background:#4cc38a"></i><i style="background:#4cc38a"></i><i style="background:#5b9cf5"></i><i style="background:#272c37"></i></div><b>3/5</b></div>
+          <div class="pl-actions"><div class="pl-btn"><b>Progress page</b><span class="pl-key">⇧↩</span></div></div>
+        </div>
+      </div>
+      <div class="pl-card">
+        <div class="pl-glyph"><span class="spin" style="border-color:#5b9cf5;border-right-color:transparent"></span></div>
+        <div class="pl-body">
+          <div class="pl-line pl-t"><span class="tt">api-tests</span><span class="rt">~4m left</span></div>
+          <div class="pl-line pl-meta"><span class="pl-badge">herdr</span><span class="pl-place">~/code/acme-shop</span><span class="pl-sep">·</span><span class="pl-tag">#131</span><span class="pl-bg">1 shell</span></div>
+          <div class="pl-now">Testing…  Bash(pnpm test api)</div>
+          <div class="pl-prog"><div class="pl-segs"><i style="background:#4cc38a"></i><i style="background:#5b9cf5"></i><i style="background:#272c37"></i></div><b>1/3</b></div>
+        </div>
+      </div>
+      <div class="pl-card">
+        <div class="pl-glyph"><span class="spin" style="border-color:#5b9cf5;border-right-color:transparent"></span></div>
+        <div class="pl-body">
+          <div class="pl-line pl-t"><span class="tt">docs-sync</span><span class="rt">3m</span></div>
+          <div class="pl-line pl-meta"><span class="pl-badge">herdr</span><span class="pl-place">~/docs</span><span class="pl-bg">1 agent</span></div>
+          <div class="pl-now">Writing…  Write(docs/billing.md)</div>
+        </div>
+      </div>
+      <div class="pl-card">
+        <div class="pl-glyph"><span class="spin" style="border-color:#5b9cf5;border-right-color:transparent"></span></div>
+        <div class="pl-body">
+          <div class="pl-line pl-t"><span class="tt">search-index</span><span class="rt">8m</span></div>
+          <div class="pl-line pl-meta"><span class="pl-badge">tmux</span><span class="pl-place">~/code/acme-shop</span><span class="pl-bg">2 shells</span></div>
+          <div class="pl-now">Indexing…  Bash(pnpm search:reindex)</div>
+        </div>
+      </div>
+      <div class="pl-sec"><i style="background:#4cc38a"></i><b>Done</b><span>1</span></div>
+      <div class="pl-card">
+        <div class="pl-glyph"><span class="pl-check">✓</span></div>
+        <div class="pl-body">
+          <div class="pl-line pl-t"><span class="tt">flaky-e2e</span><span class="rt">4m ago</span></div>
+          <div class="pl-line pl-meta"><span class="pl-badge">herdr</span><span class="pl-place">~/code/acme-shop</span><span class="pl-sep">·</span><span class="pl-tag">#129</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="pl-foot"><span>updated 1s ago</span><span class="pl-fill"></span><span>5 sessions · 2 roots</span></div>
+  </div>
 </div>
 <script>
 const LANES=[{id:'blocked',name:'TOWER',sub:'Needs you',c:'#e5484d'},{id:'working',name:'RUNWAY',sub:'Working',c:'#5b9cf5'},{id:'done',name:'APPROACH',sub:'Done, unseen',c:'#4cc38a'},{id:'idle',name:'TAXI',sub:'Idle',c:'#7a8296'}];
@@ -139,13 +238,40 @@ const AG=[
  {id:'search',s:'search-index',sp:'acme-shop',st:'idle',d:'Idle',ctx:18,t:'12m'},
  {id:'perf',s:'perf-audit',sp:'infra',st:'idle',d:'Idle',ctx:54,t:'25m'},
  {id:'copy',s:'onboarding-copy',sp:'docs',st:'idle',d:'Idle',ctx:9,t:'1h'}];
-const DETAIL={blocked:{docs:'Allow Bash(git push origin main)?'},working:{search:'Indexing…  Bash(pnpm search:reindex)',docs:'Writing…  Write(docs/billing.md)',api:'Testing…  Bash(pnpm test api)'}};
 // Status changes in the loop; it ends where it starts so the GIF loops cleanly.
 const EVENTS=[[1000,'docs','blocked'],[2200,'api','done'],[3400,'search','working'],[4800,'docs','working'],[6000,'search','idle'],[7200,'api','working']];
-const LOOP=8400, MOVE=400, LANE_H=84, GAP=8, SLOT=26+8+240+24;
-const SPACES=[['A',1],['D',0,'#e5484d'],['I',0,'#e5484d'],['W',0],['M',0,'#4cc38a']];
-document.getElementById('rail').innerHTML=SPACES.map(([l,on,d])=>`<div class="tile ${on?'on':''}">${l}${d?`<span class="d" style="background:${d}"></span>`:''}</div>`).join('')+'<div style="flex:1"></div><div class="rb">+</div><div class="rb">⚙</div>';
-const PLANE='<svg viewBox="0 0 48 48" fill="currentColor"><path d="M8 21.5h26c4 0 8 1.2 9.5 2.5c-1.5 1.3-5.5 2.5-9.5 2.5H8a2.5 2.5 0 0 1 0-5z"/><path d="M19 21.5L14 8h4.5L30 21.5z"/><path d="M19 26.5L14 40h4.5L30 26.5z"/><path d="M8.5 21.5L5.5 14.5h3.2L13 21.5z"/><path d="M8.5 26.5L5.5 33.5h3.2L13 26.5z"/></svg>';
+const LOOP=8400, MOVE=400, LANE_H=76, GAP=8, SLOT=220;
+// One repository group (base checkout then worktrees) and two spaces of their own; groups stay contiguous.
+const SPACES=[{l:'A',base:1},{l:'M',on:1},{l:'W',done:1},{l:'D',blocked:1},{l:'I',idle:1}];
+const TILE=32, TGAP=8, cy=i=>i*(TILE+TGAP)+TILE/2;
+const elbow=(i,c)=>`<div style="position:absolute;left:8px;top:${cy(i)-8}px;width:8px;height:9px;border-left:2px solid ${c};border-bottom:2px solid ${c};border-bottom-left-radius:8px"></div>`;
+document.getElementById('rail').innerHTML='<div id="railcol">'+
+ `<div style="position:absolute;left:8px;top:${cy(0)}px;width:2px;height:${cy(2)-8-cy(0)}px;background:#3a4050"></div>`+
+ `<div style="position:absolute;left:8px;top:${cy(0)-1}px;width:8px;height:2px;background:#3a4050"></div>`+
+ elbow(1,'#3a4050')+elbow(2,'#3a4050')+
+ SPACES.map(s=>`<div class="tile ${s.on?'on':''}">${s.l}${s.blocked?'<span class="d" style="background:#e5484d"></span>':''}${s.done?'<span class="d" style="background:#4cc38a"></span>':''}${s.idle?'<span class="ir"></span>':''}</div>`).join('')+
+ '</div><div style="flex:1"></div>'+
+ '<div id="railacct">'+
+ '<svg width="40" height="40" viewBox="0 0 40 40">'+
+ '<circle cx="20" cy="20" r="18.5" fill="none" stroke="#343a48" stroke-width="3"/>'+
+ '<circle cx="20" cy="20" r="14" fill="none" stroke="#343a48" stroke-width="3"/>'+
+ '<path d="M20 6A14 14 0 1 1 18.25 6.11" fill="none" stroke="#e5484d" stroke-width="3"/>'+
+ '<circle cx="20" cy="20" r="10.5" fill="#1a1e28"/>'+
+ '<text x="20" y="20" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="600" fill="#7a8296">W</text>'+
+ '</svg>'+
+ '<svg width="40" height="40" viewBox="0 0 40 40">'+
+ '<circle cx="20" cy="20" r="18.5" fill="none" stroke="#343a48" stroke-width="3"/>'+
+ '<circle cx="20" cy="20" r="14" fill="none" stroke="#343a48" stroke-width="3"/>'+
+ '<path d="M20 1.5A18.5 18.5 0 0 1 38.46 18.84" fill="none" stroke="#a3a9b8" stroke-width="3"/>'+
+ '<path d="M20 6A14 14 0 0 1 28.92 9.21" fill="none" stroke="#a3a9b8" stroke-width="3"/>'+
+ '<circle cx="20" cy="20" r="10.5" fill="#1a1e28"/>'+
+ '<text x="20" y="20" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="600" fill="#eef0f5">P</text>'+
+ '</svg>'+
+ '</div>'+
+ '<div id="railbtn"><div class="rb">+</div><div class="rb">⚙</div></div>';
+const PLANE='<svg viewBox="0 0 48 28"><path d="M7 13 4.5 3.6c-.3-1.2 1.1-2 2-1.1L15 11z" fill="currentColor"/><path d="M5 14.5c0-3 2.4-5 5.4-5H33c7 0 12 3 13 7.2-1 4.2-6 6.8-13 6.8H12c-4 0-7-3.6-7-9z" fill="currentColor"/></svg>'+
+ '<svg viewBox="0 0 48 28"><path d="M38 12.4h2.6c2 .4 3.6 1.3 4.5 2.6H38.6c-.8 0-1.3-.6-1.1-1.3.2-.8.4-1.3.5-1.3z" fill="#0b0d14"/><circle cx="18" cy="15.4" r="1.5" fill="#0b0d14"/><circle cx="23" cy="15.4" r="1.5" fill="#0b0d14"/><circle cx="28" cy="15.4" r="1.5" fill="#0b0d14"/><circle cx="33" cy="15.4" r="1.5" fill="#0b0d14"/></svg>'+
+ '<svg viewBox="0 0 48 28"><path d="M20 19.5h9.5l-6 6.8c-.4.5-1 .7-1.6.7h-2.6z" fill="#00000055"/><path d="M6 15.5h7" stroke="#00000055" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
 // state k = after k events; each state: status + change time per agent
 // An agent that changes in the loop starts with its last change time, so each runway's order at the end matches the start.
 function states(){const out=[];const last={};for(const [t,id] of EVENTS)last[id]=t;
@@ -153,26 +279,35 @@ function states(){const out=[];const last={};for(const [t,id] of EVENTS)last[id]
  for(const [t,id,st] of EVENTS){cur={...cur,[id]:{st,at:t}};out.push(cur);}return out;}
 const S=states();
 function layout(state){const pos={};for(const l of LANES){const ids=AG.filter(a=>state[a.id].st===l.id).sort((x,y)=>state[y.id].at-state[x.id].at).map(a=>a.id);
- ids.forEach((id,i)=>pos[id]={x:156+i*SLOT,y:LI[l.id]*(LANE_H+GAP)+10});}return pos;}
+ ids.forEach((id,i)=>pos[id]={x:152+i*SLOT,y:LI[l.id]*(LANE_H+GAP)+12});}return pos;}
 const L=S.map(layout);
+const LC=Object.fromEntries(LANES.map(l=>[l.id,l.c]));
 const field=document.getElementById('field');
-field.innerHTML=LANES.map((l,i)=>`<div class="rw ${l.id==='working'?'lit':''}" style="top:${i*(LANE_H+GAP)}px"><div class="cl"></div></div><div class="lab" style="top:${i*(LANE_H+GAP)}px"><div class="n"><i style="background:${l.c}"></i>${l.name}<em id="cnt-${l.id}"></em></div><div class="s">${l.sub}</div></div>`).join('')+
- AG.map(a=>`<div class="ac" id="ac-${a.id}"><span class="pl">${PLANE}</span><div class="tag"><div class="row"><b>${a.s}</b><span class="t">${a.t}</span></div><div class="row r2"></div><div class="row" style="gap:8px"><span class="sp">${a.sp}</span><div class="bar"><i style="width:${Math.round(a.ctx/100*72)}px"></i></div><span class="p">${a.ctx}%</span></div></div></div>`).join('');
+const lamps=(l,y,a)=>`<div class="lm" style="top:${y}px">${Array.from({length:64},()=>`<i style="background:${l.c}${a}"></i>`).join('')}</div>`;
+field.innerHTML=LANES.map((l,i)=>{
+ const top=i*(LANE_H+GAP),a=l.id==='working'?'aa':'55';
+ return `<div class="rw ${l.id==='working'?'lit':''}" style="top:${top}px"></div>`
+  +`<div class="th" style="top:${top+14}px"><i></i><i></i><i></i><i></i></div>`
+  +`<div class="cl" style="top:${top+38}px"></div>`
+  +lamps(l,top+5,a)+lamps(l,top+69,a)
+  +`<div class="lab" style="top:${top}px"><i class="${l.id==='blocked'?'blink':''}" style="background:${l.c}"></i>${l.name}<em id="cnt-${l.id}"></em></div>`;
+}).join('')+
+ AG.map(a=>`<div class="ac" id="ac-${a.id}"><span class="plane">${PLANE}</span><div class="nm"><span class="sp2"></span><span class="sn">${a.s}</span></div></div>`).join('');
 const ease=x=>1-Math.pow(1-x,3);
 window.setT=function(t){t=((t%LOOP)+LOOP)%LOOP;let k=0;while(k<EVENTS.length&&EVENTS[k][0]<=t)k++;
  const st=S[k],to=L[k],from=k>0?L[k-1]:L[0],p=k>0?ease(Math.min(1,(t-EVENTS[k-1][0])/MOVE)):1;
  for(const a of AG){const el=document.getElementById('ac-'+a.id),A=from[a.id],B=to[a.id];
   el.style.left=(A.x+(B.x-A.x)*p)+'px';el.style.top=(A.y+(B.y-A.y)*p)+'px';
-  const s=st[a.id].st,on=a.sel,blocked=s==='blocked';
-  el.querySelector('.pl').style.color=on?'#f2a93b':blocked?'#e5484d':'#7a8296';
-  const tag=el.querySelector('.tag');tag.style.borderColor=on?'#f2a93b':blocked?'#e5484d80':'#1d212b';
-  el.querySelector('b').style.color=on?'#f2a93b':'#eef0f5';
-  el.querySelector('.bar i').style.background=on?'#f2a93b':'#a3a9b8';
-  const d=s==='done'?'Done':s==='idle'?'Idle':(DETAIL[s]?.[a.id]??(a.st===s?a.d:s==='working'?'Working':'Needs you'));
-  el.querySelector('.r2').innerHTML=(s==='working'?`<span class="spin" style="transform:rotate(${(t*0.3)%360}deg)"></span>`:'')+`<span class="dt">${d}</span>`;}
+  const s=st[a.id].st,on=a.sel,tint=on?'#f2a93b':(LC[s]??'#7a8296');
+  el.querySelector('.plane').style.color=tint;
+  el.querySelector('.sn').style.color=on?'#f2a93b':'#eef0f5';
+  const sp=el.querySelector('.sp2');
+  sp.className='sp2'+(s==='working'?' spin':'');
+  sp.style.borderColor=tint;sp.style.borderRightColor='transparent';}
  for(const l of LANES)document.getElementById('cnt-'+l.id).textContent=AG.filter(a=>st[a.id].st===l.id).length;
  document.getElementById('sb').textContent=`${AG.length} agents · ${AG.filter(a=>st[a.id].st==='blocked').length} need you`;
- document.getElementById('hc').textContent=`${AG.length} aircraft · 4 runways`;
- document.querySelectorAll('#tabs .spin,.ph .spin').forEach(s=>s.style.transform=`rotate(${(t*0.3)%360}deg)`);};
+ {const n=k=>AG.filter(a=>st[a.id].st===k).length,stat=(k,c,l)=>n(k)?`<span style="display:inline-flex;align-items:center;gap:6px"><i style="width:6px;height:6px;border-radius:3px;background:${c}"></i>${n(k)} ${l}</span>`:'';
+ document.getElementById('hc').innerHTML=stat('blocked','#e5484d','need you')+stat('working','#5b9cf5','working')+`<span>${AG.length} aircraft</span>`;}
+ document.querySelectorAll('#tabs .spin,.ph .spin,#pulse .spin,#lanes .spin').forEach(s=>s.style.transform=`rotate(${(t*0.3)%360}deg)`);};
 window.LOOP=LOOP;setT(0);
 </script></body></html>

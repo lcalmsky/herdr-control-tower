@@ -19,16 +19,48 @@
   "children": [
     {
       "id": "rail",
-      "type": "block",
+      "type": "column",
       "size": {
         "px": 64
       },
       "resizable": false,
       "window_drag": true,
       "background": "chrome",
-      "content": {
-        "mod": "tower-rail"
-      }
+      "children": [
+        {
+          "id": "rail-spaces",
+          "type": "block",
+          "content": {
+            "mod": "tower-rail"
+          }
+        },
+        {
+          "id": "rail-accounts",
+          "type": "block",
+          "size": {
+            "px": 96
+          },
+          "content": {
+            "mod": "claude-accounts",
+            "props": {
+              "role": "rail"
+            }
+          }
+        },
+        {
+          "id": "rail-buttons",
+          "type": "block",
+          "size": {
+            "px": 84
+          },
+          "content": {
+            "mod": "tower-rail",
+            "props": {
+              "role": "buttons"
+            }
+          }
+        }
+      ]
     },
     {
       "id": "work",
@@ -52,20 +84,6 @@
                   "role": "head"
                 }
               }
-            },
-            {
-              "id": "accounts",
-              "type": "block",
-              "size": {
-                "px": 150
-              },
-              "window_drag": true,
-              "content": {
-                "mod": "claude-accounts",
-                "props": {
-                  "role": "chip"
-                }
-              }
             }
           ]
         },
@@ -73,7 +91,7 @@
           "id": "tower-lanes",
           "type": "block",
           "size": {
-            "px": 384
+            "px": 352
           },
           "content": {
             "mod": "tower"
@@ -138,6 +156,19 @@
           }
         }
       ]
+    },
+    {
+      "id": "pulse",
+      "type": "block",
+      "size": {
+        "px": 380
+      },
+      "resizable": false,
+      "window_drag": true,
+      "background": "chrome",
+      "content": {
+        "mod": "pulse"
+      }
     }
   ]
 }
