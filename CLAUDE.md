@@ -19,6 +19,11 @@
 4. **설치본 동기화.** 내 Herdr 에서 바로 보려면 바꾼 mod 파일을 `~/.config/herdr-app/mods/<mod>/` 로 복사한다. 설치본은 심볼릭 링크가 아니라 복사본이다.
 5. **README 의 권한 고지 확인.** mod 가 새로 `exec`·`hc`·네트워크·폴더 밖 파일 읽기를 하게 됐으면 README 의 "Before adding it" 목록에 적는다.
 
+## claude-accounts mod 의 정본
+
+- `mods/claude-accounts/` 의 정본은 `~/git-repo/herdr-claude-accounts` 다. 이 저장소의 사본은 레이아웃이 싣기 위해 두는 복사본이다.
+- 정본에서 `mods/claude-accounts/` 를 고치면 같은 푸시에서 이 저장소의 `mods/claude-accounts/` 로도 그대로 복사한다. `main.js`, `mod.json`, `cca`, `usage-tap.sh` 가 두 사본에서 달라지면 안 된다.
+
 ## 라이선스
 
 `mods/tower-tabs` 는 Herdr 의 `tabs` mod 를 고친 것이라 Apache 2.0 이다. 이 폴더를 고치면 `main.js` 첫 줄의 수정 내역 주석도 같이 고친다.

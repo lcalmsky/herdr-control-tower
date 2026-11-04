@@ -37,17 +37,37 @@
       "children": [
         {
           "id": "tower-head",
-          "type": "block",
+          "type": "row",
           "size": {
             "px": 44
           },
           "window_drag": true,
-          "content": {
-            "mod": "tower",
-            "props": {
-              "role": "head"
+          "children": [
+            {
+              "id": "tower-title",
+              "type": "block",
+              "content": {
+                "mod": "tower",
+                "props": {
+                  "role": "head"
+                }
+              }
+            },
+            {
+              "id": "accounts",
+              "type": "block",
+              "size": {
+                "px": 150
+              },
+              "window_drag": true,
+              "content": {
+                "mod": "claude-accounts",
+                "props": {
+                  "role": "chip"
+                }
+              }
             }
-          }
+          ]
         },
         {
           "id": "tower-lanes",
