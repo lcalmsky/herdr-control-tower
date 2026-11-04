@@ -2,7 +2,9 @@
 
 A night air-traffic-control layout for [Herdr](https://herdr.dev). Every agent is an aircraft on one of four runways: TOWER (needs you), RUNWAY (working), APPROACH (done, unseen) and TAXI (idle). When an agent's status changes, its aircraft slides to the new runway. The chrome stays a quiet ink-grey console; status color is only a dot beside each runway name, and amber marks the agent you're focused on.
 
-![Control Tower](preview.png)
+![Control Tower: agents sliding between runways as their status changes](demo.gif)
+
+The preview and the animation use made-up agents and terminals. They are rendered from `art/preview.html`, a sample-data copy of the window that follows the mods' sizes and colors.
 
 ## Add it
 
