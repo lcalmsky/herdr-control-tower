@@ -31,6 +31,7 @@ export default class ClaudeAccounts extends View {
     this.role = p.role ?? "menu";
     this.accounts = p.accounts?.length ? p.accounts : [{ name: "default", email: "", usage: null }];
     this.current = p.current ?? "default";
+    this.globalDefault = p.globalDefault ?? "default";
     this.session = p.session ?? null;
     this.readError = p.error ?? null;
     if (this.role !== "chip" && p.mode === "add") {
@@ -63,6 +64,7 @@ export default class ClaudeAccounts extends View {
     cx.spawn(async (cx) => {
       const accounts = [];
       let current = "default";
+      let globalDefault = "default";
       let session = null;
       let r = null;
       try {
@@ -71,6 +73,7 @@ export default class ClaudeAccounts extends View {
         for (const line of (r.stdout ?? "").split("\n")) {
           const [kind, name, mail] = line.split("\t");
           if (kind === "C" && name) current = name;
+          if (kind === "D" && ACCOUNT_NAME.test(name ?? "")) globalDefault = name;
           if (kind === "A" && ACCOUNT_NAME.test(name ?? "")) {
             const a = { name, email: (mail ?? "").trim(), usage: null };
             byName[name] = a;
@@ -90,6 +93,7 @@ export default class ClaudeAccounts extends View {
         this.readError = null;
         this.accounts = accounts;
         this.current = current;
+        this.globalDefault = globalDefault;
         this.session = session?.cwd ? session : null;
       } else if (!r || r.code === 127) {
         this.readError = `cca not found: ${cca()}`;
@@ -105,8 +109,11 @@ export default class ClaudeAccounts extends View {
   openAgent(name) {
     if (!ACCOUNT_NAME.test(name)) return;
     // The default account runs with CLAUDE_CONFIG_DIR unset: set to ~/.claude, Claude Code would read
-    // ~/.claude/.claude.json instead of ~/.claude.json and start from an empty state.
-    const env = name === "default" ? "unset CLAUDE_CONFIG_DIR;" : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}"`;
+    // ~/.claude/.claude.json instead of ~/.claude.json and start from an empty state. CCA_ACCOUNT makes
+    // this click win over the global default the shell hook would otherwise apply.
+    const env = name === "default"
+      ? "unset CLAUDE_CONFIG_DIR; CCA_ACCOUNT=default"
+      : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}" CCA_ACCOUNT=${name}`;
     run("tab.new", { name: name === "default" ? "claude" : name, argv: ["sh", "-lc", `${env} exec claude`] });
   }
 
@@ -150,7 +157,8 @@ export default class ClaudeAccounts extends View {
         const section = resume.length ? 18 + resume.length * 26 : 0;
         openOverlay({ mod: "claude-accounts", kind: "popup", width: 260,
           height: this.readError ? 80 : 67 + list.length * 38 + section,
-          props: { role: "menu", current: name, accounts: list, session: this.session, error: this.readError ?? null } });
+          props: { role: "menu", current: name, globalDefault: this.globalDefault ?? "default",
+            accounts: list, session: this.session, error: this.readError ?? null } });
       })
       .child(this.avatar(label, 20, 11))
       .child(div().text_size(13).font_family(FONT).font_weight(600).text_color(INK.t1).child(label))
@@ -185,7 +193,9 @@ export default class ClaudeAccounts extends View {
   // Resumes the focused agent's session under another account; the old tab keeps running.
   continueAs(name, session) {
     if (!ACCOUNT_NAME.test(name) || !SESSION_ID.test(session?.id ?? "") || !session?.cwd) return;
-    const env = name === "default" ? "unset CLAUDE_CONFIG_DIR;" : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}"`;
+    const env = name === "default"
+      ? "unset CLAUDE_CONFIG_DIR; CCA_ACCOUNT=default"
+      : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}" CCA_ACCOUNT=${name}`;
     run("tab.new", { name, folder: session.cwd, argv: ["sh", "-lc", `${env} exec claude --resume ${session.id}`] });
   }
 
@@ -213,7 +223,11 @@ export default class ClaudeAccounts extends View {
           (el) => el.child(div().size(5).flex_none().rounded(3).bg(INK.amber).tooltip("Most 5h headroom")))
         .child(h_flex().flex_1().min_w(0).justify_end()
           .child(div().truncate().text_size(10.5).font_family("Geist Mono").text_color(INK.t3).child(a.email || "not signed in"))))
-      .child(h_flex().w_full().min_w(0).justify_end().child(this.usageLine(a)));
+      .child(h_flex().w_full().min_w(0).items_center()
+        .child(div().w(36).flex_none())
+        .when(a.name === (this.globalDefault ?? "default"),
+          (el) => el.child(div().flex_none().text_size(10).font_family("Geist Mono").text_color(INK.t3).child("default for new")))
+        .child(h_flex().flex_1().min_w(0).justify_end().child(this.usageLine(a))));
     const resumeRow = (a) => h_flex().id(`cont-${a.name}`).h(26).px(8).rounded(6).gap(8).items_center().cursor_pointer()
       .hover((h) => h.bg(INK.selected)).tooltip(`Resume this session as ${a.name}`)
       .on_click(() => { closeOverlay(props().overlay); this.continueAs(a.name, this.session); })

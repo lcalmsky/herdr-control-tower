@@ -4,13 +4,18 @@
 
 set -u
 
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/usage"
+TOWER="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower"
+STATE="$TOWER/usage"
+CURRENT="$TOWER/current"
 SHARED="projects history.jsonl file-history todos plans tasks teams paste-cache session-env sessions"
 
 die() { printf 'cca: %s\n' "$*" >&2; exit 1; }
 
+# Exit with a specific code, for the statuses the app and tidemark branch on.
+die_as() { code=$1; shift; printf 'cca: %s\n' "$*" >&2; exit "$code"; }
+
 reserved_name() {
-  case "$1" in ls|add|share|help|'-'*) return 0 ;; esac
+  case "$1" in ls|add|share|use|current|shell-init|help|'-'*) return 0 ;; esac
   return 1
 }
 
@@ -34,9 +39,23 @@ current_account() {
   acct_name "$d"
 }
 
+# The global default the shell hook and tidemark read: the account every new session starts
+# under. A missing, invalid or since-deleted choice reads as default.
+current_default() {
+  name=
+  if [ -r "$CURRENT" ]; then
+    IFS= read -r name < "$CURRENT" || [ -n "$name" ] || name=
+  fi
+  if [ -n "$name" ] && [ "$name" != default ]; then
+    valid_name "$name" || name=
+    [ -n "$name" ] && [ -d "$HOME/.claude-accounts/$name" ] || name=
+  fi
+  printf '%s\n' "${name:-default}"
+}
+
 email() {
   if [ -f "$1" ]; then
-    e=$(grep -o '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*"//; s/"$//')
+    e=$(grep -oE '"emailAddress"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' "$1" 2>/dev/null | head -n 1 | sed -E 's/^"emailAddress"[[:space:]]*:[[:space:]]*"//; s/"$//' | tr -d '\000-\037')
     if [ -n "$e" ]; then printf '%s\n' "$e"; return; fi
   fi
   printf 'not signed in\n'
@@ -72,6 +91,50 @@ hhmm() {
 
 pct_of() { printf '%.0f' "$1" 2>/dev/null || printf '%s' "$1"; }
 
+# JSON strings for `cca ls --json`: backslash and quote escaped, control characters dropped.
+json_esc() {
+  printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+json_email() {
+  e=$(email "$1")
+  if [ "$e" = "not signed in" ]; then
+    printf 'null'
+  else
+    # email() returns the value as written in .claude.json, already JSON-escaped; pass it only if it is a valid JSON string body.
+    if printf '%s' "$e" | grep -qE '^([^"\\]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*$'; then
+      printf '"%s"' "$e"
+    else
+      printf 'null'
+    fi
+  fi
+}
+
+# One window as JSON, or null. A window past its reset reads as 0 % and keeps its reset time.
+json_window() {
+  f="$STATE/$1.json"
+  [ -f "$f" ] || { printf 'null'; return 0; }
+  obj=$(grep -o "\"$2\":{[^}]*}" "$f" 2>/dev/null | head -n 1)
+  used=$(val "$obj" used)
+  if [ -z "$obj" ] || [ -z "$used" ]; then printf 'null'; return 0; fi
+  reset=$(val "$obj" resets_at)
+  if [ -n "$reset" ] && [ "$reset" -le "$(date +%s)" ] 2>/dev/null; then
+    used=0
+  fi
+  if [ -n "$reset" ]; then
+    printf '{"used":%s,"resets_at":%s}' "$used" "$reset"
+  else
+    printf '{"used":%s,"resets_at":null}' "$used"
+  fi
+}
+
+json_updated() {
+  f="$STATE/$1.json"
+  [ -f "$f" ] || { printf 'null'; return 0; }
+  u=$(grep -o '"updated_at":[0-9][0-9.]*' "$f" 2>/dev/null | head -n 1 | cut -d: -f2)
+  if [ -n "$u" ]; then printf '%s' "$u"; else printf 'null'; fi
+}
+
 # One cell of the table, padded to $3 columns: "12%", "94% ↻15:20" or "–". The ↻ and – are
 # multibyte but one column each, so the width is counted from the parts rather than with ${#}.
 usage_cell() {
@@ -106,7 +169,58 @@ else
   OFF= BOLD= DIM= AMBER= RED=
 fi
 
+# One line of JSON for tidemark: the global default, then every account with its email, both
+# windows and the most-5h-headroom flag, in the same order and with the same rule as the table.
+cmd_ls_json() {
+  gdef=$(current_default)
+  best_name=
+  best_used=
+  json_scan() {
+    vals=$(usage_get "$1" five_hour) || return 0
+    used=${vals%% *}
+    if [ -z "$best_used" ] || awk -v a="$used" -v b="$best_used" 'BEGIN { exit !(a + 0 < b + 0) }'; then
+      best_used=$used
+      best_name=$1
+    fi
+  }
+  json_scan default
+  for d in "$HOME"/.claude-accounts/*/; do
+    [ -d "$d" ] || continue
+    n=${d%/}
+    n=${n##*/}
+    [ "$n" = default ] && continue
+    valid_name "$n" || continue
+    json_scan "$n"
+  done
+
+  printf '{"current":"%s","accounts":[' "$(json_esc "$gdef")"
+  sep=
+  json_row() {
+    best=false
+    [ "$1" = "$best_name" ] && best=true
+    printf '%s{"name":"%s","email":%s,"five_hour":%s,"seven_day":%s,"updated_at":%s,"best":%s}' \
+      "$sep" "$(json_esc "$1")" "$(json_email "$2")" \
+      "$(json_window "$1" five_hour)" "$(json_window "$1" seven_day)" \
+      "$(json_updated "$1")" "$best"
+    sep=,
+  }
+  json_row default "$HOME/.claude.json"
+  for d in "$HOME"/.claude-accounts/*/; do
+    [ -d "$d" ] || continue
+    d=${d%/}
+    n=${d##*/}
+    [ "$n" = default ] && continue
+    valid_name "$n" || continue
+    json_row "$n" "$d/.claude.json"
+  done
+  printf ']}\n'
+}
+
 cmd_ls() {
+  if [ "${1:-}" = --json ]; then
+    cmd_ls_json
+    return
+  fi
   cur=$(current_account)
   best_name=
   best_used=
@@ -169,6 +283,7 @@ cmd_porcelain() {
     cur=$(acct_name "${d:-$HOME/.claude}")
   fi
   printf 'C\t%s\n' "$cur"
+  printf 'D\t%s\n' "$(current_default)"
   printf 'A\tdefault\t%s\n' "$(email "$HOME/.claude.json")"
   usage_line default
   for d in "$HOME"/.claude-accounts/*/; do
@@ -309,8 +424,56 @@ cmd_run() {
     CLAUDE_CONFIG_DIR="$dir"
     export CLAUDE_CONFIG_DIR
   fi
+  # An explicit choice wins over the shell hook's global default for the session this starts.
+  CCA_ACCOUNT=$name
+  export CCA_ACCOUNT
   command -v claude >/dev/null 2>&1 || die "claude is not on PATH."
   exec claude "$@"
+}
+
+cmd_current() {
+  current_default
+}
+
+# Sets the account every new session starts under. Exit 2: unusable name, 3: no such account.
+cmd_use() {
+  name=${1:-}
+  if [ -z "$name" ]; then
+    die_as 2 "usage: cca use <name>"
+  fi
+  if [ "$name" != default ]; then
+    valid_name "$name" || die_as 2 "Use letters, digits, - or _."
+    [ -d "$HOME/.claude-accounts/$name" ] || die_as 3 "No account $name."
+  fi
+  mkdir -p "$TOWER" || die_as 1 "Could not create $TOWER."
+  tmp="$TOWER/.current.$$"
+  printf '%s\n' "$name" > "$tmp" || { rm -f "$tmp"; die_as 1 "Could not write $CURRENT."; }
+  mv "$tmp" "$CURRENT" || { rm -f "$tmp"; die_as 1 "Could not write $CURRENT."; }
+  printf '%s\n' "$name"
+}
+
+# The shell hook: an interactive shell turns a bare `claude` into the global default account.
+# It reads the choice file with the builtin `read` and starts no other process.
+cmd_shell_init() {
+  cat <<'EOF'
+# cca shell-init
+claude() {
+  local _cca_cur=
+  if [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ -z "${CCA_ACCOUNT:-}" ]; then
+    if [ -r "${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/current" ]; then
+      read -r _cca_cur < "${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/current" || [ -n "$_cca_cur" ] || _cca_cur=
+    fi
+    case "$_cca_cur" in
+      ''|*[!A-Za-z0-9_-]*|default|ls|add|share|use|current|shell-init|help) _cca_cur= ;;
+    esac
+    if [ -n "$_cca_cur" ] && [ -d "$HOME/.claude-accounts/$_cca_cur" ]; then
+      CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/$_cca_cur" command claude "$@"
+      return
+    fi
+  fi
+  command claude "$@"
+}
+EOF
 }
 
 cmd_help() {
@@ -318,8 +481,13 @@ cmd_help() {
 cca — Claude Code accounts
 
   cca, cca ls          list accounts with their usage and the most 5h headroom
+  cca ls --json        the same as one line of JSON for tidemark
   cca <name> [args…]   run claude under <name>; default means ~/.claude with
                        CLAUDE_CONFIG_DIR unset (cca work -c continues here)
+  cca use <name>       make <name> the default for every new session
+  cca current          print that default
+  cca shell-init       the claude() shell function that applies it; eval it
+                       from ~/.zshrc to make a new shell start under it
   cca add <name>       create ~/.claude-accounts/<name>, sharing config and history
   cca share <name>     link the shared history into an account made before sharing
                        existed; --dry-run prints the plan first
@@ -327,14 +495,19 @@ cca — Claude Code accounts
 
 Names: letters, digits, - and _.
 Usage files: ${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/usage/
+Default for new sessions: ${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/current
 EOF
 }
 
 case "${1:-}" in
-  ''|ls) cmd_ls ;;
+  '') cmd_ls ;;
+  ls) shift; cmd_ls "$@" ;;
   help|-h|--help) cmd_help ;;
   add) shift; cmd_add "${1:-}" ;;
   share) shift; cmd_share "$@" ;;
+  use) shift; cmd_use "${1:-}" ;;
+  current) cmd_current ;;
+  shell-init) cmd_shell_init ;;
   --porcelain) shift; cmd_porcelain "${1:-}" ;;
   --porcelain-add) shift; cmd_porcelain_add "${1:-}" ;;
   --*) die "unknown option $1" ;;
