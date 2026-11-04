@@ -17,7 +17,9 @@ Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/lca
 Before adding it, know that the `tower` mod runs programs and reads files outside its folder:
 
 - every 2.5 s it runs `hc read` on working and blocked agents to show what their screen says;
-- every 10 s it runs a small `sh` script that reads Claude Code's own transcripts under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) to show context use. Only token counts and the model name leave the script, and its one temp file (`mktemp`) is removed on exit.
+- every 10 s it runs a small `sh` script that reads Claude Code's own transcripts under `~/.claude` (or `$CLAUDE_CONFIG_DIR`), then `~/.claude-accounts/*`, to show context use. Only token counts and the model name leave the script, and its one temp file (`mktemp`) is removed on exit;
+- every 30 s it runs a small `sh` script that reads the signed-in email from `~/.claude.json` and `~/.claude-accounts/*/.claude.json` for the account chip and its menu;
+- when you choose **Add account**, it creates `~/.claude-accounts/<name>/` and symlinks everything in `~/.claude` into it except the login and per-session state, so settings, `CLAUDE.md`, skills and hooks are shared (it never writes inside `~/.claude`); when you choose an account, it opens `claude` in a new tab with `CLAUDE_CONFIG_DIR` pointing at that account's folder.
 
 It makes no network calls. `RECIPE.md` is the brief to build it from scratch.
 

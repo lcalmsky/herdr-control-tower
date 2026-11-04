@@ -16,6 +16,10 @@ html,body{background:#000}
 #work{flex:1;min-width:0;display:flex;flex-direction:column}
 #head{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 20px}
 #head b{font:700 15px Nunito}#head span{font:600 13px Nunito;color:#7a8296}
+.chip{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 3px;border-radius:13px;background:#11141c;border:1px solid #1d212b}
+.chip .av{width:20px;height:20px;border-radius:10px;background:#1a1e28;display:flex;align-items:center;justify-content:center;font:700 11px Nunito;color:#eef0f5}
+#head .chip .nm{font:600 13px Nunito;color:#eef0f5}
+.chip .cv{font:400 10px Nunito;color:#7a8296;font-style:normal}
 #lanes{height:384px;flex:none;padding:12px}
 #field{position:relative;width:100%;height:100%;overflow:hidden}
 .rw{position:absolute;left:0;right:0;height:84px;border-radius:12px;background:#11141c;border:1px solid #1d212b;overflow:hidden}
@@ -54,7 +58,7 @@ html,body{background:#000}
   <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
   <div id="rail"></div>
   <div id="work">
-    <div id="head"><b>acme-shop</b><span id="hc"></span></div>
+    <div id="head"><b>acme-shop</b><span id="hc"></span><div style="flex:1"></div><div class="chip"><i class="av">D</i><b class="nm">default</b><i class="cv">▾</i></div></div>
     <div id="lanes"><div id="field"></div></div>
     <div id="tabs">
       <div class="tb on"><span class="spin" style="width:12px;height:12px"></span>cart-refactor<span class="x">✕</span></div>

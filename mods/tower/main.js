@@ -1,12 +1,12 @@
 // Control tower: every agent is an aircraft on one of four runways.
 // TOWER needs you, RUNWAY is working, APPROACH finished while you weren't looking,
 // TAXI is idle. An aircraft slides to its new runway when the status changes, so the
-// change is seen as motion. props().role: "head" draws the title bar, anything
-// else the runways.
+// change is seen as motion. props().role: "head" draws the title bar, "accounts" the
+// account popup, anything else the runways.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, spaces, focused, run, exec, hc, props, setAgentOrder } from "herdr";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { agents, terminals, spaces, focused, run, exec, hc, props, setAgentOrder, openOverlay, closeOverlay } from "herdr";
 
 // One night-console ramp; status color only marks a dot and a waiting aircraft, amber marks the selection.
 const INK = {
@@ -33,11 +33,16 @@ const ASK = /^[\s│]*([^\n]{6,80}\?)\s*[│]?\s*$/gm;
 
 // For each pid: the newest assistant usage numbers of that Claude process's transcript,
 // or "C" when a compaction came after it. Only numbers and the model name leave the shell.
-const CONTEXT_SCRIPT = `root="\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+const CONTEXT_SCRIPT = `base="\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 tmp=$(mktemp "\${TMPDIR:-/tmp}/herdr-tower.XXXXXX") || exit 0
 trap 'rm -f "$tmp"' EXIT
 for pid in "$@"; do
   case "$pid" in ''|*[!0-9]*) continue ;; esac
+  root=
+  for d in "$base" "$HOME"/.claude-accounts/*/; do
+    [ -f "$d/sessions/$pid.json" ] && { root="$d"; break; }
+  done
+  [ -n "$root" ] || continue
   id=$(head -c 65536 "$root/sessions/$pid.json" 2>/dev/null | grep -oE '"sessionId" *: *"[0-9a-fA-F-]{36}"' | grep -oE '[0-9a-fA-F-]{36}' | head -n 1)
   [ -n "$id" ] || continue
   f=$(ls "$root"/projects/*/"$id".jsonl 2>/dev/null | head -n 1)
@@ -49,6 +54,55 @@ for pid in "$@"; do
     echo "$pid A $model $nums"
   fi
 done`;
+
+// Which account a Claude process runs under, and the accounts with their signed-in email.
+// Only names, emails and a marker leave the shell.
+const ACCOUNTS_SCRIPT = `acct_name() {
+  case "$1" in
+    "$HOME/.claude") echo default ;;
+    "$HOME"/.claude-accounts/*) b=\${1%/}; echo "\${b##*/}" ;;
+    *) echo default ;;
+  esac
+}
+email() {
+  [ -f "$1" ] || { echo "not signed in"; return; }
+  e=$(grep -o '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*"//; s/"$//')
+  [ -n "$e" ] && echo "$e" || echo "not signed in"
+}
+cur=default
+if [ -n "$1" ]; then
+  for d in "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$HOME"/.claude-accounts/*/; do
+    d=\${d%/}
+    [ -d "$d" ] && [ -f "$d/sessions/$1.json" ] || continue
+    cur=$(acct_name "$d"); break
+  done
+fi
+printf 'C\\t%s\\n' "$cur"
+printf 'A\\tdefault\\t%s\\n' "$(email "$HOME/.claude.json")"
+for d in "$HOME"/.claude-accounts/*/; do
+  d=\${d%/}
+  [ -d "$d" ] && [ "\${d##*/}" != default ] || continue
+  printf 'A\\t%s\\t%s\\n' "\${d##*/}" "$(email "$d/.claude.json")"
+done`;
+
+// A new account is a config dir of its own: everything in ~/.claude is linked in except login and per-session state.
+const ADD_ACCOUNT_SCRIPT = `name=$1
+case "$name" in ''|*[!A-Za-z0-9_-]*) echo "Use letters, digits, - or _."; exit 2 ;; default) echo "default is the ~/.claude account."; exit 2 ;; esac
+dir="$HOME/.claude-accounts/$name"
+[ -e "$dir" ] && { echo "$name already exists."; exit 3; }
+mkdir -p "$dir" || exit 4
+for src in "$HOME"/.claude/* "$HOME"/.claude/.[!.]*; do
+  [ -e "$src" ] || continue
+  x=\${src##*/}
+  case "$x" in
+    .credentials.json|.claude.json|projects|sessions|session-env|shell-snapshots|todos|statsig|history.jsonl|ide|debug|file-history|backups|paste-cache|telemetry|cache|transcripts|tasks|jobs|logs|daemon*|.session-stats.json|.last-*|*.lock) continue ;;
+  esac
+  ln -s "$src" "$dir/$x" || { rm -rf "$dir"; echo "Could not link $x."; exit 5; }
+done
+echo "$dir"`;
+
+// Account names go into a shell command line, so only these characters are accepted anywhere.
+const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
 
 function ago(ms) {
   const m = Math.floor(ms / 60000);
@@ -64,11 +118,96 @@ export default class Tower extends View {
     this.verbs = {}; // address -> what the screen says it's doing
     this.ctx = {}; // address -> { used, limit } | null
     this.since = {}; // address -> { s, at }
+    if (this.role === "head") {
+      this.accounts = [{ name: "default", email: "" }];
+      this.current = "default";
+      cx.timer.every(30000, (cx) => this.readAccounts(cx));
+      this.readAccounts(cx);
+      return;
+    }
+    if (this.role === "accounts") {
+      if (props()?.mode === "add") {
+        this.cx = cx;
+        this.input = InputState.new({ value: "" });
+        this.input.on("change", (_e, cx) => { this.error = null; cx.notify(); });
+        this.input.on("submit", () => this.addAccount());
+        this.input.focus();
+        cx.timer.after(600, () => this.input.focus());
+      }
+      return;
+    }
     cx.timer.every(30000, (cx) => cx.notify());
-    if (this.role === "head") return;
     cx.timer.every(2500, (cx) => this.readScreens(cx));
     cx.timer.every(10000, (cx) => this.readContext(cx));
     this.readContext(cx);
+  }
+
+  // The account the focused Claude agent runs under: the first root holding its sessions/<pid>.json.
+  focusedPid() {
+    const f = focused();
+    const a = agents().find((x) => x.focused || (f && (f.terminal === x.address || f.agent === x.address)));
+    if (!a || a.address.includes("/")) return null;
+    const t = terminals().find((x) => x.address === a.address);
+    const claude = [t?.program?.key, t?.foreground?.name].some((n) => String(n ?? "").toLowerCase().includes("claude"));
+    return claude ? t?.foreground?.pid ?? null : null;
+  }
+
+  readAccounts(cx, pid = this.focusedPid()) {
+    if (this.readingAccounts) return;
+    this.focusKey = pid == null ? "" : String(pid);
+    this.readingAccounts = true;
+    cx.spawn(async (cx) => {
+      const accounts = [];
+      let current = "default";
+      try {
+        const r = await exec("sh", ["-c", ACCOUNTS_SCRIPT, "sh", this.focusKey]);
+        for (const line of (r.stdout ?? "").split("\n")) {
+          const [kind, name, email] = line.split("\t");
+          if (kind === "C" && name) current = name;
+          if (kind === "A" && ACCOUNT_NAME.test(name ?? "")) accounts.push({ name, email: (email ?? "").trim() });
+        }
+      } catch {}
+      this.readingAccounts = false;
+      if (accounts.length) {
+        this.accounts = accounts;
+        this.current = current;
+      }
+      cx.notify();
+      // A focus change that landed during the read is picked up here, not on the 30 s timer.
+      const now = this.focusedPid();
+      if ((now == null ? "" : String(now)) !== this.focusKey) this.readAccounts(cx, now);
+    });
+  }
+
+  // Opens the chosen account's Claude Code in a new tab; running agents keep their own account.
+  openAgent(name) {
+    if (!ACCOUNT_NAME.test(name)) return;
+    // The default account runs with CLAUDE_CONFIG_DIR unset: set to ~/.claude, Claude Code would read
+    // ~/.claude/.claude.json instead of ~/.claude.json and start from an empty state.
+    const env = name === "default" ? "unset CLAUDE_CONFIG_DIR;" : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}"`;
+    run("tab.new", { name: name === "default" ? "claude" : name, argv: ["sh", "-lc", `${env} exec claude`] });
+  }
+
+  addAccount() {
+    if (this.busy) return;
+    const name = (this.input?.value() ?? "").trim();
+    if (!ACCOUNT_NAME.test(name)) { this.error = "Use letters, digits, - or _."; this.cx.notify(); return; }
+    if (name === "default") { this.error = "default is the ~/.claude account."; this.cx.notify(); return; }
+    this.busy = true;
+    this.error = null;
+    this.cx.notify();
+    this.cx.spawn(async (cx) => {
+      let r = null;
+      try { r = await exec("sh", ["-c", ADD_ACCOUNT_SCRIPT, "sh", name]); } catch {}
+      this.busy = false;
+      if (!r || r.code !== 0) {
+        this.error = ((r?.stderr || r?.stdout) ?? "").trim() || "Could not create the account folder.";
+        cx.notify();
+        return;
+      }
+      closeOverlay(props().overlay);
+      this.openAgent(name);
+    });
   }
 
   // What working and blocked agents show: the spinner verb and last tool, or the question asked.
@@ -130,11 +269,79 @@ export default class Tower extends View {
     for (const a of list) if (this.since[a.address]?.s !== a.status) this.since[a.address] = { s: a.status, at: now };
   }
 
-  head() {
+  avatar(name, size, font) {
+    return div().size(size).flex_none().rounded(size / 2).bg(INK.raised).flex().items_center().justify_center()
+      .text_size(font).font_family(FONT).font_bold().text_color(INK.t1).child([...(name || "?")][0]?.toUpperCase() ?? "?");
+  }
+
+  accountChip() {
+    const name = this.current ?? "default";
+    return h_flex().id("head-accounts").h(26).flex_none().items_center().gap(6).pl(3).pr(10).rounded(13)
+      .bg(INK.card).border(1).border_color(INK.line)
+      .hover((h) => h.bg(INK.selected)).cursor_pointer().tooltip("Claude accounts")
+      .on_click(() => {
+        const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "" }];
+        openOverlay({ mod: "tower", kind: "popup", width: 260, height: 68 + list.length * 30,
+          props: { role: "accounts", current: name, accounts: list } });
+      })
+      .child(this.avatar(name, 20, 11))
+      .child(div().text_size(13).font_family(FONT).font_weight(600).text_color(INK.t1).child(name))
+      .child(div().text_size(10).font_family(FONT).text_color(INK.t3).child("▾"));
+  }
+
+  head(cx) {
     const cur = spaces().find((s) => s.active);
+    const pid = this.focusedPid();
+    if ((pid == null ? "" : String(pid)) !== this.focusKey) this.readAccounts(cx, pid);
     return h_flex().size_full().pl(20).pr(20).gap(8).items_center()
       .child(div().text_size(15).font_family(FONT).font_bold().text_color(INK.t1).child(cur?.name ?? "Herdr"))
-      .child(div().text_size(13).font_family(FONT).font_weight(600).text_color(INK.t3).child(`${agents().length} aircraft · 4 runways`));
+      .child(div().text_size(13).font_family(FONT).font_weight(600).text_color(INK.t3).child(`${agents().length} aircraft · 4 runways`))
+      .child(div().flex_1())
+      .child(this.accountChip());
+  }
+
+  accountsMenu() {
+    const p = props() ?? {};
+    const cur = p.current ?? "default";
+    const list = p.accounts?.length ? p.accounts : [{ name: "default", email: "" }];
+    const row = (a) => h_flex().id(`acct-${a.name}`).h(30).px(8).rounded(6).gap(8).items_center().cursor_pointer()
+      .hover((h) => h.bg(INK.selected)).tooltip(`Open ${a.name} in a new tab`)
+      .on_click(() => { closeOverlay(props().overlay); this.openAgent(a.name); })
+      .child(div().w(10).flex_none().text_size(11).font_family(FONT).text_color(INK.amber).child(a.name === cur ? "✓" : ""))
+      .child(this.avatar(a.name, 18, 9))
+      .child(div().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t1).child(a.name))
+      .child(h_flex().flex_1().min_w(0).justify_end()
+        .child(div().truncate().text_size(10.5).font_family("Geist Mono").text_color(INK.t3).child(a.email || "not signed in")));
+    return v_flex().id("accounts-menu").w_full().min_h(0).p(5)
+      .child(div().h(18).px(8).flex().items_center().text_size(10).font_family(FONT).font_bold().text_color(INK.t3)
+        .child("OPEN IN A NEW TAB"))
+      .children(list.map(row))
+      .child(div().h(1).mx(2).my(4).bg(INK.line))
+      .child(h_flex().id("acct-add").h(30).px(8).rounded(6).gap(8).items_center().cursor_pointer()
+        .hover((h) => h.bg(INK.selected))
+        .on_click(() => {
+          closeOverlay(props().overlay);
+          openOverlay({ mod: "tower", kind: "popup", width: 260, height: 170,
+            props: { role: "accounts", mode: "add" } });
+        })
+        .child(div().w(10).flex_none())
+        .child(div().text_size(12).font_family(FONT).font_weight(600).text_color(INK.t2).child("+ Add account…")));
+  }
+
+  addAccountView() {
+    const button = (id, label, primary, action) => h_flex().id(id).h(30).px(12).items_center().rounded(8).border(1)
+      .border_color(primary ? INK.amber : INK.line).bg(primary ? INK.amber : INK.raised)
+      .text_color(primary ? "#0b0d14" : INK.t1).text_size(12).font_family(FONT).font_weight(600).cursor_pointer()
+      .hover((h) => h.opacity(0.9)).on_click(action).child(label);
+    return v_flex().id("account-add").w_full().min_h(0).p(14).gap(8)
+      .child(div().text_size(14).font_family(FONT).font_bold().text_color(INK.t1).child("Add account"))
+      .child(div().text_size(11).font_family(FONT).text_color(INK.t3).child("Creates ~/.claude-accounts/<name>"))
+      .child(Input.new(this.input).h(32).px(10).rounded(8).border(1).border_color(INK.line).bg(INK.raised)
+        .text_size(13).text_color(INK.t1))
+      .when(Boolean(this.error), (el) => el.child(div().text_size(11).font_family(FONT).text_color("#e5484d").child(this.error)))
+      .child(h_flex().justify_end().gap(8)
+        .child(button("acct-cancel", "Cancel", false, () => closeOverlay(props().overlay)))
+        .child(button("acct-create", this.busy ? "Creating…" : "Create", true, () => this.addAccount())));
   }
 
   // The session name: the agent's terminal title (Claude Code sets it), else its tab.
@@ -227,7 +434,9 @@ export default class Tower extends View {
       .children(craft));
   }
 
-  render() {
-    return this.role === "head" ? this.head() : this.lanes();
+  render(cx) {
+    if (this.role === "head") return this.head(cx);
+    if (this.role === "accounts") return props()?.mode === "add" ? this.addAccountView() : this.accountsMenu();
+    return this.lanes();
   }
 }
