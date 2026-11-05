@@ -41,4 +41,4 @@ Keep your own status line command after the tap path unchanged. The tap passes t
 
 ## License
 
-MIT for the layout, theme, `tower`, `tower-rail`, `pulse` and the bundled `claude-accounts` mod. `mods/tower-tabs` is modified from Herdr's shipped `tabs` mod and stays under the Apache License 2.0 (`mods/tower-tabs/LICENSE`). The bundled Nunito font is under the SIL Open Font License 1.1 (`mods/tower/fonts/OFL.txt`; `mods/pulse/fonts/` holds a duplicate copy).
+MIT for the layout, theme, `tower`, `tower-rail`, `pulse` and the bundled `claude-accounts` mod. `mods/tower-tabs` is modified from Herdr's shipped `tabs` mod and stays under the Apache License 2.0 (`mods/tower-tabs/LICENSE`). The bundled Nunito font is under the SIL Open Font License 1.1 (`mods/tower/fonts/OFL.txt`).
