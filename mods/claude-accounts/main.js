@@ -10,7 +10,7 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, terminals, focused, run, exec, props, appHome, openOverlay, closeOverlay } from "herdr";
 
 const INK = {
-  card: "#11141c", raised: "#1a1e28", selected: "#161a24", line: "#1d212b",
+  ink: "#07080d", card: "#11141c", raised: "#1a1e28", selected: "#161a24", line: "#1d212b",
   t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b", red: "#e5484d", ring: "#3a404e", track: "#c4c8d2", used: "#5b9cf5",
 };
 const FONT = "Nunito";
@@ -281,8 +281,8 @@ export default class ClaudeAccounts extends View {
 
   // A 40 px avatar per account, stacked from the bottom: one ring per rate-limit window, the 5h
   // window outside. Every track is drawn in full so each avatar keeps the same outer edge. The
-  // focused Claude Code pane's account goes on top with an amber letter; otherwise the letter is
-  // bright only on the account new sessions open as.
+  // focused Claude Code pane's account goes on top with an amber disc and a dark letter; otherwise
+  // the letter is bright only on the account new sessions open as.
   rail(cx) {
     const pid = this.focusedPid();
     if ((pid == null ? "" : String(pid)) !== this.focusKey) this.readAccounts(cx, pid);
@@ -323,10 +323,11 @@ export default class ClaudeAccounts extends View {
       .tooltip(this.readError ?? `${tip}${here ? " · this pane" : ""}${bright ? " · new sessions" : ""}`)
       .on_click(() => this.openMenu())
       .children(rings)
-      .child(div().absolute().top(20 - core).left(20 - core).size(core * 2).rounded(core).bg(INK.raised)
-        .hover((h) => h.bg(INK.selected))
+      // The focused pane's account fills its disc amber with a dark letter, so it reads as selected.
+      .child(div().absolute().top(20 - core).left(20 - core).size(core * 2).rounded(core).bg(here ? INK.amber : INK.raised)
+        .when(!here, (el) => el.hover((h) => h.bg(INK.selected)))
         .flex().items_center().justify_center()
-        .text_size(10).font_semibold().text_color(here ? INK.amber : bright ? INK.t1 : INK.t3)
+        .text_size(10).font_semibold().text_color(here ? INK.ink : bright ? INK.t1 : INK.t3)
         .child([...(display(a) || "?")][0]?.toUpperCase() ?? "?"));
   }
 
