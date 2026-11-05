@@ -11,7 +11,7 @@ import { agents, terminals, focused, run, exec, props, appHome, openOverlay, clo
 
 const INK = {
   card: "#11141c", raised: "#1a1e28", selected: "#161a24", line: "#1d212b",
-  t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b", red: "#e5484d", ring: "#3a404e", track: "#d4d7df", used: "#5b9cf5",
+  t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b", red: "#e5484d", ring: "#3a404e", track: "#c4c8d2", used: "#5b9cf5",
 };
 const FONT = "Nunito";
 
@@ -40,12 +40,17 @@ const resetLabel = (at) => {
     : WEEKDAYS[d.getDay()];
 };
 
-// A clockwise arc from 12 o'clock on a 40 px square; a whole circle is two half arcs.
+// A clockwise arc from 12 o'clock on a 40 px square, drawn in pieces of at most a quarter turn:
+// one large arc whose ends nearly meet (98 % used) is drawn off-centre by the painter.
 function arcPath(r, frac, width) {
-  const p = PathBuilder.stroke(width).move_to(20, 20 - r);
-  if (frac >= 0.999) return p.arc_to(r, r, 0, false, true, 20, 20 + r).arc_to(r, r, 0, false, true, 20, 20 - r).build();
-  const a = frac * 2 * Math.PI;
-  return p.arc_to(r, r, 0, frac > 0.5, true, 20 + r * Math.sin(a), 20 - r * Math.cos(a)).build();
+  let p = PathBuilder.stroke(width).move_to(20, 20 - r);
+  const turn = Math.min(1, frac);
+  const pieces = Math.max(1, Math.ceil(turn * 4));
+  for (let i = 1; i <= pieces; i++) {
+    const a = (turn * i / pieces) * 2 * Math.PI;
+    p = p.arc_to(r, r, 0, false, true, 20 + r * Math.sin(a), 20 - r * Math.cos(a));
+  }
+  return p.build();
 }
 
 export default class ClaudeAccounts extends View {
@@ -88,6 +93,7 @@ export default class ClaudeAccounts extends View {
   readAccounts(cx, pid = this.focusedPid()) {
     if (this.readingAccounts) return;
     this.focusKey = pid == null ? "" : String(pid);
+    const key = this.focusKey;
     this.readingAccounts = true;
     cx.spawn(async (cx) => {
       const accounts = [];
@@ -124,6 +130,7 @@ export default class ClaudeAccounts extends View {
         this.readError = null;
         this.accounts = accounts;
         this.current = current;
+        this.currentKey = key;
         this.globalDefault = globalDefault;
         this.session = session?.cwd ? session : null;
       } else if (!r || r.code === 127) {
@@ -273,24 +280,29 @@ export default class ClaudeAccounts extends View {
   }
 
   // A 40 px avatar per account, stacked from the bottom: one ring per rate-limit window, the 5h
-  // window outside. Every track is drawn in full so each avatar keeps the same outer edge; the
-  // letter is bright only on the account new sessions open as.
+  // window outside. Every track is drawn in full so each avatar keeps the same outer edge. The
+  // focused Claude Code pane's account goes on top with an amber letter; otherwise the letter is
+  // bright only on the account new sessions open as.
   rail(cx) {
     const pid = this.focusedPid();
     if ((pid == null ? "" : String(pid)) !== this.focusKey) this.readAccounts(cx, pid);
     const list = this.accounts?.length ? this.accounts : [{ name: "default", email: "", usage: null }];
+    // Without a focused Claude Code pane there is no "this pane" account to mark, and `current`
+    // counts only once a read for the pane focused now has come back.
+    const here = this.focusKey && this.currentKey === this.focusKey ? this.current : null;
+    const ordered = [...list.filter((a) => a.name === here), ...list.filter((a) => a.name !== here)];
     return v_flex().size_full().items_center().justify_end().gap(8).pb(8)
-      .children(list.map((a) => this.ringAvatar(a)));
+      .children(ordered.map((a) => this.ringAvatar(a, a.name === here)));
   }
 
-  ringAvatar(a) {
+  ringAvatar(a, here) {
     const windows = [["5h", a.usage?.five], ["7d", a.usage?.seven]].map(([label, raw]) => [label, liveWindow(raw)]);
     // Ring slots are fixed (sized for three) and filled from the outside, so a ring keeps its size
     // and place whatever the ring count; fewer windows only leave the inner slots empty.
-    const width = 2.5;
-    const step = 3.5;
+    const width = 3;
+    const step = 4.5;
     const outer = 20 - width / 2;
-    const core = 9;
+    const core = 7.5;
     const rings = [];
     windows.forEach(([, w], i) => {
       const r = outer - i * step;
@@ -308,13 +320,13 @@ export default class ClaudeAccounts extends View {
     })].join(" · ");
     const bright = a.name === (this.globalDefault ?? "default");
     return div().id(`rail-acct-${a.name}`).relative().size(40).flex_none().rounded(20).cursor_pointer()
-      .tooltip(this.readError ?? (bright ? `${tip} · new sessions` : tip))
+      .tooltip(this.readError ?? `${tip}${here ? " · this pane" : ""}${bright ? " · new sessions" : ""}`)
       .on_click(() => this.openMenu())
       .children(rings)
       .child(div().absolute().top(20 - core).left(20 - core).size(core * 2).rounded(core).bg(INK.raised)
         .hover((h) => h.bg(INK.selected))
         .flex().items_center().justify_center()
-        .text_size(11).font_semibold().text_color(bright ? INK.t1 : INK.t3)
+        .text_size(10).font_semibold().text_color(here ? INK.amber : bright ? INK.t1 : INK.t3)
         .child([...(display(a) || "?")][0]?.toUpperCase() ?? "?"));
   }
 
