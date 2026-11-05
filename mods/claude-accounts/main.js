@@ -11,7 +11,7 @@ import { agents, terminals, focused, run, exec, props, appHome, openOverlay, clo
 
 const INK = {
   card: "#11141c", raised: "#1a1e28", selected: "#161a24", line: "#1d212b",
-  t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b", red: "#e5484d", ring: "#3a404e", track: "#343a48",
+  t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b", red: "#e5484d", ring: "#3a404e", track: "#d4d7df", used: "#5b9cf5",
 };
 const FONT = "Nunito";
 
@@ -285,19 +285,19 @@ export default class ClaudeAccounts extends View {
 
   ringAvatar(a) {
     const windows = [["5h", a.usage?.five], ["7d", a.usage?.seven]].map(([label, raw]) => [label, liveWindow(raw)]);
-    const three = windows.length >= 3;
-    const width = three ? 2.5 : 3;
-    const step = three ? 3.5 : 4.5;
-    // The outermost ring touches the 40 px edge whatever the ring count; more rings go inward.
+    // Ring slots are fixed (sized for three) and filled from the outside, so a ring keeps its size
+    // and place whatever the ring count; fewer windows only leave the inner slots empty.
+    const width = 2.5;
+    const step = 3.5;
     const outer = 20 - width / 2;
-    const core = outer - (windows.length - 1) * step - width / 2 - (three ? 1.5 : 2);
+    const core = 9;
     const rings = [];
     windows.forEach(([, w], i) => {
       const r = outer - i * step;
       const pct = w ? Math.min(100, Math.max(0, w.used)) : 0;
       rings.push(window.paint_path(arcPath(r, 1, width), INK.track).absolute().top(0).left(0).size(40));
       if (pct > 0) {
-        rings.push(window.paint_path(arcPath(r, pct / 100, width), pct >= 90 ? INK.red : INK.t2)
+        rings.push(window.paint_path(arcPath(r, pct / 100, width), pct >= 90 ? INK.red : INK.used)
           .absolute().top(0).left(0).size(40));
       }
     });
@@ -314,7 +314,7 @@ export default class ClaudeAccounts extends View {
       .child(div().absolute().top(20 - core).left(20 - core).size(core * 2).rounded(core).bg(INK.raised)
         .hover((h) => h.bg(INK.selected))
         .flex().items_center().justify_center()
-        .text_size(three ? 9 : 11).font_semibold().text_color(bright ? INK.t1 : INK.t3)
+        .text_size(11).font_semibold().text_color(bright ? INK.t1 : INK.t3)
         .child([...(display(a) || "?")][0]?.toUpperCase() ?? "?"));
   }
 
