@@ -1,5 +1,6 @@
 {
   "id": "root",
+  "preview": "layouts/control-tower.png",
   "type": "row",
   "theme": "control-tower",
   "background": "canvas",
