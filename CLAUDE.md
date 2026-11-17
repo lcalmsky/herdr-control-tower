@@ -21,12 +21,13 @@
 
 ## herdr-shared 에서 vendor 한 파일
 
-- 아래 파일의 정본은 `~/git-repo/herdr-shared` 이고, 이 저장소의 사본은 `tools/vendor.sh` 가 써 넣은 것이다. 여기서 직접 고치지 않는다. 고칠 것이 있으면 herdr-shared 에서 고치고 다시 vendor 한다.
+- 아래 파일의 정본은 [herdr-shared](https://github.com/lcalmsky/herdr-shared) 이고, 이 저장소는 그것을 `vendor/herdr-shared` 서브모듈로 참조한다. 사본은 `vendor/herdr-shared/tools/vendor.sh` 가 써 넣은 것이다. 여기서 직접 고치지 않는다.
   ```sh
-  ~/git-repo/herdr-shared/tools/vendor.sh accounts mods/claude-accounts scan mods/pulse
+  vendor/herdr-shared/tools/vendor.sh --list .
   ```
-- 대상: `mods/claude-accounts/` 의 `cca`, `usage-tap.sh`, `usage-api.mjs`, `codex-usage.mjs`, `models.mjs` 와 `mods/pulse/scan.sh`.
-- vendor 한 뒤 `./tools/check-vendor.sh` 와 `node --test tests/` 를 돌린다. check-vendor 는 herdr-shared 가 없으면 건너뛴다.
+- 대상: `mods/claude-accounts/` 의 `cca`, `usage-tap.sh`, `usage-api.mjs`, `codex-usage.mjs`, `models.mjs` 와 `mods/pulse/scan.sh` (`herdr-shared.list` 가 그룹과 대상을 정한다).
+- 공용 스크립트를 고칠 때는 herdr-shared 에서 고쳐 push 한 뒤 그 저장소에서 `tools/sync-themes.sh --commit --push` 를 돌린다. 이 저장소의 서브모듈 포인터가 그 커밋으로 올라가고, 사본이 다시 쓰인다.
+- vendor 한 뒤 `./tools/check-vendor.sh` 와 `node --test tests/` 를 돌린다. check-vendor 는 `vendor/herdr-shared/tools/check-vendor.sh` 를 부르는 얇은 호출자이고, 서브모듈이 없으면 건너뛴다.
 
 ## claude-accounts mod 의 정본
 

@@ -14,6 +14,8 @@ Paste this into an agent running in Herdr:
 Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/lcalmsky/herdr-control-tower
 ```
 
+The shared runtime files in the mod folders are copies from the [`herdr-shared`](https://github.com/lcalmsky/herdr-shared) submodule at `vendor/herdr-shared`. A plain clone already has the copies; `git clone --recursive` is only needed for the drift check.
+
 Before adding it, know what the mods run and read outside their folders:
 
 - the `pulse` mod runs `sh mods/pulse/scan.sh` every 3 s. The script reads Claude Code's session records and transcripts under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) and under each `~/.claude-accounts/*` that has a `sessions/` folder; the handoff file a session's first prompt names; thread memory and a per-ticket goals file when configured (`$HERDR_THREAD_SESSIONS` / `$HERDR_GOALS_FILE`, else the `threadSessions` / `goalsFile` keys of `~/.config/herdr-shared/scan.json`); Codex rollout logs under `~/.codex/sessions` and Gemini chat files under `~/.gemini`; the deadhd checklist state under `/tmp/deadhd-state` (or `$DEADHD_STATE_DIR`); page alerts under `~/.pulse/pages` (or `$PULSE_PAGES_DIR`); and the environment of the session processes through `ps` and `lsof`, for the pane, tab, workspace and Orca handle variables. It writes only a ledger and identity cache under `${TMPDIR:-/tmp}/herdr-pulse`, and it never opens `*.key` files.
