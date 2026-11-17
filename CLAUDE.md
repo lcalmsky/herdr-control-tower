@@ -19,10 +19,20 @@
 4. **설치본 동기화.** 내 Herdr 에서 바로 보려면 바꾼 mod 파일을 `~/.config/herdr-app/mods/<mod>/` 로 복사한다. 설치본은 심볼릭 링크가 아니라 복사본이다.
 5. **README 의 권한 고지 확인.** mod 가 새로 `exec`·`hc`·네트워크·폴더 밖 파일 읽기를 하게 됐으면 README 의 "Before adding it" 목록에 적는다.
 
+## herdr-shared 에서 vendor 한 파일
+
+- 아래 파일의 정본은 `~/git-repo/herdr-shared` 이고, 이 저장소의 사본은 `tools/vendor.sh` 가 써 넣은 것이다. 여기서 직접 고치지 않는다. 고칠 것이 있으면 herdr-shared 에서 고치고 다시 vendor 한다.
+  ```sh
+  ~/git-repo/herdr-shared/tools/vendor.sh accounts mods/claude-accounts scan mods/pulse
+  ```
+- 대상: `mods/claude-accounts/` 의 `cca`, `usage-tap.sh`, `usage-api.mjs`, `codex-usage.mjs`, `models.mjs` 와 `mods/pulse/scan.sh`.
+- vendor 한 뒤 `./tools/check-vendor.sh` 와 `node --test tests/` 를 돌린다. check-vendor 는 herdr-shared 가 없으면 건너뛴다.
+
 ## claude-accounts mod 의 정본
 
-- `mods/claude-accounts/` 의 정본은 `~/git-repo/herdr-claude-accounts` 다. 이 저장소의 사본은 레이아웃이 싣기 위해 두는 복사본이다.
-- 정본에서 `mods/claude-accounts/` 를 고치면 같은 푸시에서 이 저장소의 `mods/claude-accounts/` 로도 그대로 복사한다. `main.js`, `mod.json`, `cca`, `usage-tap.sh` 가 두 사본에서 달라지면 안 된다.
+- `mods/claude-accounts/` 의 `main.js`, `mod.json`(그리고 `fonts/`·아이콘)의 정본은 `~/git-repo/herdr-claude-accounts` 다. 이 저장소의 사본은 레이아웃이 싣기 위해 두는 복사본이다.
+- 정본에서 그 파일을 고치면 같은 푸시에서 이 저장소의 `mods/claude-accounts/` 로도 그대로 복사한다. `main.js`, `mod.json` 이 두 사본에서 달라지면 안 된다.
+- `cca`, `usage-tap.sh`, `usage-api.mjs`, `codex-usage.mjs`, `models.mjs` 는 위의 vendor 규칙을 따른다.
 
 ## 라이선스
 

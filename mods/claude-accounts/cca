@@ -5,19 +5,36 @@
 set -u
 
 TOWER="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower"
+# The usage-tap hook writes here.
 STATE="$TOWER/usage"
+# Resolved through a link, since cca is often linked onto PATH away from usage-api.mjs.
+HERE=$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf %s "$0")")" && pwd)
 CURRENT="$TOWER/current"
+CODEX_CURRENT="$TOWER/codex-current"
 LABELS="$TOWER/labels"
 SHARED="projects history.jsonl file-history todos plans tasks teams paste-cache session-env sessions"
 
 die() { printf 'cca: %s\n' "$*" >&2; exit 1; }
 
-# Exit with a specific code, for the statuses the app and tidemark branch on.
+# Exit with a specific code, for the statuses the app branches on.
 die_as() { code=$1; shift; printf 'cca: %s\n' "$*" >&2; exit "$code"; }
 
 reserved_name() {
   case "$1" in ls|add|share|use|current|shell-init|help|'-'*) return 0 ;; esac
   return 1
+}
+
+# A models.json entry may be named codex, but a folder may not: the `cca codex ...` subcommand
+# owns the word.
+folder_reserved() {
+  case "$1" in codex) return 0 ;; esac
+  return 1
+}
+
+# A model from models.json counts wherever an account name does, but has no config folder.
+model_exists() {
+  command -v node >/dev/null 2>&1 || return 1
+  node "$HERE/models.mjs" exists "$TOWER" "$1" >/dev/null 2>&1
 }
 
 valid_name() {
@@ -40,16 +57,34 @@ current_account() {
   acct_name "$d"
 }
 
-# The global default the shell hook and tidemark read: the account every new session starts
-# under. A missing, invalid or since-deleted choice reads as default.
+# The global default the shell hook and the app read: the account or model every new session
+# starts under. A missing, invalid or since-deleted choice reads as default.
 current_default() {
   name=
   if [ -r "$CURRENT" ]; then
     IFS= read -r name < "$CURRENT" || [ -n "$name" ] || name=
   fi
   if [ -n "$name" ] && [ "$name" != default ]; then
-    valid_name "$name" || name=
-    [ -n "$name" ] && [ -d "$HOME/.claude-accounts/$name" ] || name=
+    if valid_name "$name"; then
+      [ -d "$HOME/.claude-accounts/$name" ] || model_exists "$name" || name=
+    else
+      name=
+    fi
+  fi
+  printf '%s\n' "${name:-default}"
+}
+
+# The Codex account new sessions start under, read the same way: missing, invalid or since-deleted
+# reads as default, which is ~/.codex itself.
+current_codex() {
+  name=
+  if [ -r "$CODEX_CURRENT" ]; then
+    IFS= read -r name < "$CODEX_CURRENT" || [ -n "$name" ] || name=
+  fi
+  if [ -n "$name" ] && [ "$name" != default ]; then
+    if valid_name "$name" && [ -d "$HOME/.codex-accounts/$name" ]; then :
+    else name=
+    fi
   fi
   printf '%s\n' "${name:-default}"
 }
@@ -192,7 +227,7 @@ else
   OFF= BOLD= DIM= AMBER= RED=
 fi
 
-# One line of JSON for tidemark: the global default, then every account with its email, both
+# One line of JSON: the global default, then every account with its email, both
 # windows and the most-5h-headroom flag, in the same order and with the same rule as the table.
 cmd_ls_json() {
   gdef=$(current_default)
@@ -290,10 +325,64 @@ cmd_ls() {
 
 usage_line() {
   f="$STATE/$1.json"
-  [ -f "$f" ] || return 0
+  api="$STATE/$1.api.json"
+  [ -f "$f" ] || [ -f "$api" ] || return 0
   five=$(grep -o '"five_hour":{[^}]*}' "$f" 2>/dev/null | head -n 1)
   seven=$(grep -o '"seven_day":{[^}]*}' "$f" 2>/dev/null | head -n 1)
-  printf 'U\t%s\t%s\t%s\t%s\t%s\n' "$1" "$(val "$five" used)" "$(val "$five" resets_at)" "$(val "$seven" used)" "$(val "$seven" resets_at)"
+  fable=$(grep -o '"fable":{[^}]*}' "$api" 2>/dev/null | head -n 1)
+  # The tap never lowers a value inside one window, so after a reset pass only the endpoint carries
+  # the drop. The tap file's updated_at moves with any window, so it cannot tell a stuck week apart:
+  # a fresh endpoint read for the same or a later window wins instead.
+  api_seven=$(grep -o '"seven_day":{[^}]*}' "$api" 2>/dev/null | head -n 1)
+  if [ -n "$api_seven" ]; then
+    fetched=$(grep -oE '"fetched_at":[0-9]+' "$api" 2>/dev/null | head -n 1 | cut -d: -f2)
+    api_reset=$(val "$api_seven" resets_at)
+    tap_reset=$(val "$seven" resets_at)
+    if [ -z "$seven" ]; then
+      seven=$api_seven
+    elif [ $(( $(date +%s) - ${fetched:-0} )) -le 900 ] && [ "${api_reset:-0}" -ge $(( ${tap_reset:-0} - 3600 )) ]; then
+      seven=$api_seven
+    fi
+  fi
+  printf 'U\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$(val "$five" used)" "$(val "$five" resets_at)" \
+    "$(val "$seven" used)" "$(val "$seven" resets_at)" "$(val "$fable" used)" "$(val "$fable" resets_at)"
+}
+
+plan_line() {
+  [ -f "$2" ] || return 0
+  p=$(grep -oE '"planDisplayName"[[:space:]]*:[[:space:]]*"[^"]*"' "$2" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*"//; s/"$//' | tr -d '\000-\037')
+  [ -n "$p" ] && printf 'P\t%s\t%s\n' "$1" "$p"
+  return 0
+}
+
+# The status line carries only the 5h and 7d windows, so the Fable weekly window comes from the
+# usage endpoint /usage reads, with the token Claude Code keeps in the keychain for that config dir.
+# It is written to <name>.api.json, apart from the file usage-tap.sh rewrites.
+api_fetch() {
+  name=$1 dir=$2
+  if [ "$name" = default ]; then svc="Claude Code-credentials"
+  else svc="Claude Code-credentials-$(printf '%s' "$dir" | shasum -a 256 | cut -c1-8)"; fi
+  creds=$(security find-generic-password -s "$svc" -w 2>/dev/null) || return 0
+  body=$(printf '%s' "$creds" | node "$HERE/usage-api.mjs" 2>/dev/null) || return 0
+  [ -n "$body" ] || return 0
+  mkdir -p "$STATE" && printf '%s' "$body" > "$STATE/$name.api.json.tmp.$$" && mv "$STATE/$name.api.json.tmp.$$" "$STATE/$name.api.json"
+}
+
+# At most every 5 minutes, in the background so the porcelain read never waits on the network.
+api_refresh() {
+  command -v node >/dev/null 2>&1 && command -v security >/dev/null 2>&1 || return 0
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  stamp="$STATE/.api-fetch"
+  [ -n "$(find "$stamp" -mmin -5 2>/dev/null)" ] && return 0
+  : > "$stamp"
+  (
+    api_fetch default "$HOME/.claude"
+    for d in "$HOME"/.claude-accounts/*/; do
+      d=${d%/}
+      [ -d "$d" ] && valid_name "${d##*/}" && [ "${d##*/}" != default ] || continue
+      api_fetch "${d##*/}" "$d"
+    done
+  ) </dev/null >/dev/null 2>&1 &
 }
 
 porcelain_label() {
@@ -301,19 +390,72 @@ porcelain_label() {
   printf 'L\t%s\t%s\n' "$1" "$l"
 }
 
+# One Codex home: its login, the usage codex-usage.mjs reads from it, and its label under the
+# codex: prefix.
+codex_row() {
+  cname=$1 chome=$2
+  cemail=
+  [ -n "$have_node" ] && cemail=$(node "$HERE/codex-usage.mjs" --email "$chome" 2>/dev/null)
+  printf 'X\t%s\t%s\n' "$cname" "$cemail"
+  if [ -n "$have_node" ]; then
+    cusage=$(node "$HERE/codex-usage.mjs" "$chome" 2>/dev/null) || cusage=
+    if [ -n "$cusage" ]; then
+      printf 'V\t%s\t%s\t%s\t%s\t%s\n' "$cname" \
+        "$(printf '%s\n' "$cusage" | cut -f1)" "$(printf '%s\n' "$cusage" | cut -f2)" \
+        "$(printf '%s\n' "$cusage" | cut -f3)" "$(printf '%s\n' "$cusage" | cut -f4)"
+      cplan=$(printf '%s\n' "$cusage" | cut -f5)
+      if [ -n "$cplan" ]; then
+        cfirst=$(printf '%s' "$cplan" | cut -c1 | tr '[:lower:]' '[:upper:]')
+        crest=$(printf '%s' "$cplan" | cut -c2-)
+        printf 'Q\t%s\tChatGPT %s%s\n' "$cname" "$cfirst" "$crest"
+      fi
+    fi
+  fi
+  porcelain_label "codex:$cname"
+}
+
+# Nothing to report, and no node run, when neither home exists.
+codex_lines() {
+  [ -d "$HOME/.codex" ] || [ -d "$HOME/.codex-accounts" ] || return 0
+  printf 'Y\t%s\n' "$(current_codex)"
+  have_node=
+  command -v node >/dev/null 2>&1 && have_node=1
+  codex_row default "$HOME/.codex"
+  for d in "$HOME"/.codex-accounts/*/; do
+    [ -d "$d" ] || continue
+    d=${d%/}
+    n=${d##*/}
+    [ "$n" = default ] && continue
+    valid_name "$n" || continue
+    codex_row "$n" "$d"
+  done
+}
+
 cmd_porcelain() {
   pid=${1:-}
   case "$pid" in *[!0-9]*) pid= ;; esac
   cur=default
+  envs=
   if [ -n "$pid" ]; then
-    d=$(ps -E -ww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | grep '^CLAUDE_CONFIG_DIR=' | tail -n 1 | cut -d= -f2-)
+    # Tests point CCA_PS at a stub because the sandbox's ps -E shows no environment.
+    envs=$(${CCA_PS:-ps} -E -ww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n')
+    d=$(printf '%s\n' "$envs" | grep '^CLAUDE_CONFIG_DIR=' | tail -n 1 | cut -d= -f2-)
     d=${d%/}
     cur=$(acct_name "${d:-$HOME/.claude}")
   fi
+  # Models are read before C so a pane running one reports it instead of the account it borrows.
+  models_out=
+  if command -v node >/dev/null 2>&1; then
+    models_out=$(printf '%s\n' "$envs" | node "$HERE/models.mjs" porcelain "$TOWER" "$HERE" 2>/dev/null)
+    m=$(printf '%s\n' "$models_out" | awk -F '\t' '$1 == "C" { print $2; exit }')
+    [ -n "$m" ] && cur=$m
+  fi
   printf 'C\t%s\n' "$cur"
   printf 'D\t%s\n' "$(current_default)"
+  api_refresh
   printf 'A\tdefault\t%s\n' "$(email "$HOME/.claude.json")"
   porcelain_label default
+  plan_line default "$HOME/.claude.json"
   usage_line default
   for d in "$HOME"/.claude-accounts/*/; do
     d=${d%/}
@@ -321,8 +463,22 @@ cmd_porcelain() {
     valid_name "${d##*/}" || continue
     printf 'A\t%s\t%s\n' "${d##*/}" "$(email "$d/.claude.json")"
     porcelain_label "${d##*/}"
+    plan_line "${d##*/}" "$d/.claude.json"
     usage_line "${d##*/}"
   done
+  if [ -n "$models_out" ]; then
+    printf '%s\n' "$models_out" | while IFS= read -r line; do
+      case "$line" in
+        ''|C*) continue ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done
+    # After models.mjs's own L lines, so a rename in the labels file still wins in main.js.
+    for id in $(printf '%s\n' "$models_out" | awk -F '\t' '$1 == "M" { print $2 }'); do
+      porcelain_label "$id"
+    done
+  fi
+  codex_lines
   if [ -n "$pid" ]; then
     sf="$HOME/.claude/sessions/$pid.json"
     if [ -f "$sf" ]; then
@@ -339,7 +495,9 @@ make_account() {
   name=$1
   [ "$name" = default ] && { printf 'default is the ~/.claude account.\n' >&2; return 2; }
   reserved_name "$name" && { printf '%s is a cca command.\n' "$name" >&2; return 2; }
+  folder_reserved "$name" && { printf '%s is a cca command.\n' "$name" >&2; return 2; }
   valid_name "$name" || { printf 'Use letters, digits, - or _.\n' >&2; return 2; }
+  model_exists "$name" && { printf '%s is a model.\n' "$name" >&2; return 2; }
   dir="$HOME/.claude-accounts/$name"
   [ -e "$dir" ] && { printf '%s already exists.\n' "$name" >&2; return 3; }
   mkdir -p "$dir" || { printf 'Could not create %s.\n' "$dir" >&2; return 4; }
@@ -360,6 +518,34 @@ make_account() {
   return 0
 }
 
+# A Codex account is a CODEX_HOME of its own: config and session history are linked in, while
+# login and per-machine state stay behind so the two logins never share them.
+make_codex_account() {
+  name=$1
+  [ "$name" = default ] && { printf 'default is the ~/.codex account.\n' >&2; return 2; }
+  reserved_name "$name" && { printf '%s is a cca command.\n' "$name" >&2; return 2; }
+  valid_name "$name" || { printf 'Use letters, digits, - or _.\n' >&2; return 2; }
+  folder_reserved "$name" && { printf '%s is a cca command.\n' "$name" >&2; return 2; }
+  dir="$HOME/.codex-accounts/$name"
+  [ -e "$dir" ] && { printf '%s already exists.\n' "$name" >&2; return 3; }
+  mkdir -p "$dir" || { printf 'Could not create %s.\n' "$dir" >&2; return 4; }
+  # The session folders must exist under ~/.codex first, or Codex keeps a private copy inside the
+  # account folder and the history splits.
+  for x in sessions archived_sessions; do
+    mkdir -p "$HOME/.codex/$x" || { rm -rf "$dir"; printf 'Could not create ~/.codex/%s.\n' "$x" >&2; return 4; }
+  done
+  [ -e "$HOME/.codex/history.jsonl" ] || : > "$HOME/.codex/history.jsonl" || { rm -rf "$dir"; printf 'Could not create ~/.codex/history.jsonl.\n' >&2; return 4; }
+  for src in "$HOME"/.codex/* "$HOME"/.codex/.[!.]*; do
+    [ -e "$src" ] || continue
+    x=${src##*/}
+    case "$x" in
+      auth.json|.codex-global-state.json*|*.sqlite|*.sqlite-*|.sqlite-maintenance.lock|*.lock|.tmp|ipc|log|logs|cache|computer-use|browser|.hook-trust|installation_id) continue ;;
+    esac
+    ln -s "$src" "$dir/$x" || { rm -rf "$dir"; printf 'Could not link %s.\n' "$x" >&2; return 5; }
+  done
+  return 0
+}
+
 cmd_add() {
   name=${1:-}
   make_account "$name" || exit $?
@@ -367,10 +553,31 @@ cmd_add() {
   printf 'Log in with: cca %s\n' "$name"
 }
 
+cmd_codex_add() {
+  name=${1:-}
+  make_codex_account "$name" || exit $?
+  printf 'Created ~/.codex-accounts/%s.\n' "$name"
+  printf 'Log in with: CODEX_HOME=~/.codex-accounts/%s codex login\n' "$name"
+}
+
+cmd_porcelain_add_codex() {
+  name=${1:-}
+  make_codex_account "$name" || exit $?
+  printf '%s\n' "$HOME/.codex-accounts/$name"
+}
+
 cmd_porcelain_add() {
   name=${1:-}
   make_account "$name" || exit $?
   printf '%s\n' "$HOME/.claude-accounts/$name"
+}
+
+# The add-model form's one write: models.mjs owns validation so the app and the file agree.
+cmd_porcelain_add_model() {
+  label=${1-}
+  command=${2-}
+  command -v node >/dev/null 2>&1 || die "node is required to add a model"
+  node "$HERE/models.mjs" add "$TOWER" "$label" "$command"
 }
 
 # Links an account made before sharing existed into the shared history. It merges into ~/.claude
@@ -386,6 +593,7 @@ cmd_share() {
   done
   [ "$name" = default ] && die "default is ~/.claude itself."
   reserved_name "$name" && die "$name is a cca command."
+  folder_reserved "$name" && die "$name is a cca command."
   valid_name "$name" || die "Use letters, digits, - or _."
   dir="$HOME/.claude-accounts/$name"
   [ -d "$dir" ] || die "No account $name."
@@ -445,6 +653,7 @@ cmd_run() {
   name=$1
   shift
   reserved_name "$name" && die "$name is a cca command."
+  folder_reserved "$name" && die "$name is a cca command."
   valid_name "$name" || die "Use letters, digits, - or _."
   if [ "$name" = default ]; then
     unset CLAUDE_CONFIG_DIR
@@ -465,15 +674,19 @@ cmd_current() {
   current_default
 }
 
-# Sets the account every new session starts under. Exit 2: unusable name, 3: no such account.
+# Sets the account or model every new session starts under. Exit 2: unusable name, 3: no such
+# account or model.
 cmd_use() {
   name=${1:-}
   if [ -z "$name" ]; then
     die_as 2 "usage: cca use <name>"
   fi
   if [ "$name" != default ]; then
-    valid_name "$name" || die_as 2 "Use letters, digits, - or _."
-    [ -d "$HOME/.claude-accounts/$name" ] || die_as 3 "No account $name."
+    if valid_name "$name" && [ -d "$HOME/.claude-accounts/$name" ]; then :
+    elif model_exists "$name"; then :
+    elif valid_name "$name"; then die_as 3 "No account or agent $name."
+    else die_as 2 "Use letters, digits, - or _."
+    fi
   fi
   mkdir -p "$TOWER" || die_as 1 "Could not create $TOWER."
   tmp="$TOWER/.current.$$"
@@ -482,14 +695,55 @@ cmd_use() {
   printf '%s\n' "$name"
 }
 
+# The Codex half of cmd_use: default or an existing ~/.codex-accounts/<name>. Exit 2: unusable
+# name, 3: no such account.
+cmd_codex_use() {
+  name=${1:-}
+  if [ -z "$name" ]; then
+    die_as 2 "usage: cca codex use <name>"
+  fi
+  if [ "$name" != default ]; then
+    if valid_name "$name" && [ -d "$HOME/.codex-accounts/$name" ]; then :
+    elif ! valid_name "$name"; then die_as 2 "Use letters, digits, - or _."
+    else die_as 3 "No Codex account $name."
+    fi
+  fi
+  mkdir -p "$TOWER" || die_as 1 "Could not create $TOWER."
+  tmp="$TOWER/.codex-current.$$"
+  printf '%s\n' "$name" > "$tmp" || { rm -f "$tmp"; die_as 1 "Could not write $CODEX_CURRENT."; }
+  mv "$tmp" "$CODEX_CURRENT" || { rm -f "$tmp"; die_as 1 "Could not write $CODEX_CURRENT."; }
+  printf '%s\n' "$name"
+}
+
+cmd_codex() {
+  case "${1:-}" in
+    use) shift; cmd_codex_use "${1:-}" ;;
+    add) shift; cmd_codex_add "${1:-}" ;;
+    *) die "usage: cca codex use <name> | cca codex add <name>" ;;
+  esac
+}
+
 # Sets the display label shown in place of the name; an empty label removes it. The folder never
 # changes, so a running session keeps its login. Exit 2: bad label, 3: no such account.
 cmd_porcelain_rename() {
   name=${1:-}
   label=$(printf '%s' "${2-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-  if [ "$name" != default ]; then
-    { valid_name "$name" && [ -d "$HOME/.claude-accounts/$name" ]; } || die_as 3 "No account $name."
-  fi
+  case "$name" in
+    default) ;;
+    codex:*)
+      cname=${name#codex:}
+      if [ "$cname" = default ]; then :
+      elif valid_name "$cname" && [ -d "$HOME/.codex-accounts/$cname" ]; then :
+      else die_as 3 "No Codex account $cname."
+      fi
+      ;;
+    *)
+      if valid_name "$name" && [ -d "$HOME/.claude-accounts/$name" ]; then :
+      elif model_exists "$name"; then :
+      else die_as 3 "No account $name."
+      fi
+      ;;
+  esac
   if [ -n "$label" ]; then
     valid_label "$label" || die_as 2 "A label is 1 to 24 characters, with no tabs or newlines."
   fi
@@ -512,6 +766,8 @@ cmd_porcelain_rename() {
 cmd_shell_init() {
   cat <<'EOF'
 # cca shell-init
+# A model id as the default changes nothing here: only an existing ~/.claude-accounts/<name>
+# folder is applied, so a bare `claude` stays on ~/.claude.
 claude() {
   local _cca_cur=
   if [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ -z "${CCA_ACCOUNT:-}" ]; then
@@ -528,6 +784,22 @@ claude() {
   fi
   command claude "$@"
 }
+codex() {
+  local _cca_codex=
+  if [ -z "${CODEX_HOME:-}" ]; then
+    if [ -r "${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/codex-current" ]; then
+      read -r _cca_codex < "${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/codex-current" || [ -n "$_cca_codex" ] || _cca_codex=
+    fi
+    case "$_cca_codex" in
+      ''|*[!A-Za-z0-9_-]*|default|codex|ls|add|share|use|current|shell-init|help) _cca_codex= ;;
+    esac
+    if [ -n "$_cca_codex" ] && [ -d "$HOME/.codex-accounts/$_cca_codex" ]; then
+      CODEX_HOME="$HOME/.codex-accounts/$_cca_codex" command codex "$@"
+      return
+    fi
+  fi
+  command codex "$@"
+}
 EOF
 }
 
@@ -536,7 +808,7 @@ cmd_help() {
 cca — Claude Code accounts
 
   cca, cca ls          list accounts with their usage and the most 5h headroom
-  cca ls --json        the same as one line of JSON for tidemark
+  cca ls --json        the same list as one line of JSON
   cca <name> [args…]   run claude under <name>; default means ~/.claude with
                        CLAUDE_CONFIG_DIR unset (cca work -c continues here)
   cca use <name>       make <name> the default for every new session
@@ -546,11 +818,16 @@ cca — Claude Code accounts
   cca add <name>       create ~/.claude-accounts/<name>, sharing config and history
   cca share <name>     link the shared history into an account made before sharing
                        existed; --dry-run prints the plan first
+  cca codex use <name> make ~/.codex-accounts/<name> the Codex login for new
+                       sessions; default means ~/.codex
+  cca codex add <name> create ~/.codex-accounts/<name>, linking ~/.codex's config
+                       and history into it
   cca help             this text
 
 Names: letters, digits, - and _.
 Usage files: ${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/usage/
 Default for new sessions: ${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/current
+Codex default for new sessions: ${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/codex-current
 EOF
 }
 
@@ -561,10 +838,13 @@ case "${1:-}" in
   add) shift; cmd_add "${1:-}" ;;
   share) shift; cmd_share "$@" ;;
   use) shift; cmd_use "${1:-}" ;;
+  codex) shift; cmd_codex "$@" ;;
   current) cmd_current ;;
   shell-init) cmd_shell_init ;;
   --porcelain) shift; cmd_porcelain "${1:-}" ;;
   --porcelain-add) shift; cmd_porcelain_add "${1:-}" ;;
+  --porcelain-add-codex) shift; cmd_porcelain_add_codex "${1:-}" ;;
+  --porcelain-add-model) shift; cmd_porcelain_add_model "${1-}" "${2-}" ;;
   --porcelain-rename) shift; cmd_porcelain_rename "${1:-}" "${2-}" ;;
   --*) die "unknown option $1" ;;
   *) cmd_run "$@" ;;

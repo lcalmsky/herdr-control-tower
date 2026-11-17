@@ -1,9 +1,10 @@
 #!/bin/sh
-# Read-only session scan for the Pulse mod. Prints one JSON object per line:
-# {t:"s", ...} for each live Claude Code CLI session, then one {t:"meta", ...}.
-# Reads session records, transcripts, deadhd state, page alerts and the
-# session processes' environment. Writes nothing but its ledger cache under
-# ${TMPDIR:-/tmp}/herdr-pulse. Secrets (*.key) are never opened.
+# Read-only session scan shared by the Herdr mods. Prints one JSON object per line:
+# {t:"s", ...} for each live Claude Code, Codex or Gemini CLI session, then one
+# {t:"meta", ...}. Reads session records, transcripts, agent rollout/chat files,
+# deadhd state, page alerts and the session processes' environment, plus the handoff
+# file and thread memory a session starts from. Writes nothing but its ledger
+# and identity caches under ${TMPDIR:-/tmp}/herdr-pulse. Secrets (*.key) are never opened.
 
 if ! command -v python3 >/dev/null 2>&1; then
   printf '%s\n' '{"t":"meta","roots":0,"updatedAt":0,"error":"python3 not found","pages":[],"unreadablePages":[]}'
@@ -12,11 +13,13 @@ fi
 
 exec python3 - <<'PY'
 import json
+import hashlib
 import os
 import re
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 HOME = os.path.expanduser("~")
@@ -29,6 +32,21 @@ HTTP_RE = re.compile(r"^https?://", re.I)
 ISO_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
 )
+ETIME_RE = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
+DAY_DIR_RE = re.compile(r"^\d{1,4}$")
+ROLLOUT_RE = re.compile(r"^rollout-.*\.jsonl$")
+CODEX_REQUEST_RE = re.compile(r"##\s*My request(?: for Codex)?\s*:?\s*", re.I)
+CODEX_TOOL_TYPES = ("function_call", "custom_tool_call")
+# `codex <subcommand>` forms that are not an interactive session; `codex resume` is one.
+CODEX_NON_SESSION = {
+    "app-server", "mcp", "mcp-server", "exec", "proto", "login", "logout",
+    "completion", "apply", "sandbox", "debug", "cloud",
+}
+# Codex's global options and the value each takes, so `codex -c k=v app-server` finds its subcommand.
+CODEX_VALUE_FLAGS = {
+    "-c", "--config", "-m", "--model", "-p", "--profile", "-a", "--ask-for-approval",
+    "-s", "--sandbox", "-C", "--cd", "--add-dir", "--enable", "--disable",
+}
 
 CACHE_DIR = os.path.join(os.environ.get("TMPDIR") or "/tmp", "herdr-pulse")
 
@@ -191,6 +209,64 @@ def basename(value):
         return None
     name = value.rstrip("/").split("/")[-1].strip()
     return name or None
+
+
+REPO_CACHE = {}
+
+
+def repo_of(cwd):
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    if cwd in REPO_CACHE:
+        return REPO_CACHE[cwd]
+    repo = None
+    try:
+        folder = os.path.abspath(cwd)
+        while True:
+            dotgit = os.path.join(folder, ".git")
+            if os.path.isdir(dotgit):
+                repo = basename(folder)
+                break
+            if os.path.isfile(dotgit):
+                gitdir = None
+                with open(dotgit, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if line.startswith("gitdir:"):
+                            gitdir = line[len("gitdir:"):].strip()
+                            break
+                if gitdir:
+                    if not os.path.isabs(gitdir):
+                        gitdir = os.path.join(folder, gitdir)
+                    gitdir = os.path.normpath(gitdir)
+                    common = gitdir
+                    has_common = False
+                    common_file = os.path.join(gitdir, "commondir")
+                    if os.path.isfile(common_file):
+                        with open(common_file, "r", encoding="utf-8", errors="replace") as f:
+                            value = f.read().strip()
+                        if value:
+                            common = os.path.normpath(os.path.join(gitdir, value))
+                            has_common = True
+                    if not has_common:
+                        # A gitdir without commondir (a submodule) is named after its own folder.
+                        repo = basename(folder)
+                    else:
+                        name = basename(common)
+                        if name and name != ".git" and name.endswith(".git"):
+                            repo = name[:-4] or None
+                        elif basename(os.path.dirname(common)) == "modules" and basename(os.path.dirname(os.path.dirname(common))) == ".git":
+                            repo = name
+                        else:
+                            repo = basename(os.path.dirname(common))
+                break
+            parent = os.path.dirname(folder)
+            if parent == folder:
+                break
+            folder = parent
+    except Exception:
+        repo = None
+    REPO_CACHE[cwd] = repo
+    return repo
 
 
 def tool_label(name, data):
@@ -521,6 +597,178 @@ def summarize_transcript(path):
     return summary
 
 
+HEAD_BYTES = 512 * 1024
+HANDOFF_RE = re.compile(r"(/[^\s`'\"]+/\.claude/handoff/[\w.-]+\.md)")
+# A round is counted either in Korean ("3회차") or in English ("round 3").
+ROUND_RE = re.compile(r"(\d+)\s*회차|\bround\s+(\d+)\b", re.IGNORECASE)
+PASTE_H1_RE = re.compile(r"<pasted_content[^>]*>\s*#\s+([^\n#<]+)")
+ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+# The thread-memory folder is read unless HERDR_THREAD_SESSIONS names another one.
+THREAD_SESSIONS = os.environ.get("HERDR_THREAD_SESSIONS") or os.path.join(
+    HOME, ".claude", "state", "maveyyo-bot", "sessions")
+THREAD_KEY_RE = re.compile(r"^([A-Z0-9]+)-(\d+)_(\d+)$")
+MEMORY_TOPIC_RE = re.compile(r"^-\s*(질문|원글):\s*(.+)$")
+
+
+def first_prompt(path):
+    try:
+        with open(path, "rb") as f:
+            data = f.read(HEAD_BYTES)
+    except Exception:
+        return None
+    for line in data.decode("utf-8", "replace").split("\n"):
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "user" or entry.get("isMeta"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, list):
+            content = " ".join(block.get("text", "") for block in content
+                               if isinstance(block, dict) and block.get("type") == "text")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        stripped = content.lstrip()
+        if stripped.startswith(("<local-command", "<system-reminder", "Caveat:")):
+            continue
+        if stripped.startswith(("<command-name>", "<command-message>")):
+            args = ARGS_RE.search(content)
+            content = args.group(1) if args else ""
+            if not content.strip():
+                continue
+        return content
+    return None
+
+
+def first_heading(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for index, line in enumerate(f):
+                if line.startswith("# "):
+                    return collapse(line[2:])
+                if index > 200:
+                    break
+    except Exception:
+        pass
+    return None
+
+
+def thread_topic(cwd):
+    match = THREAD_KEY_RE.match(os.path.basename(cwd))
+    if not match:
+        return None
+    channel, seconds, fraction = match.groups()
+    thread = {"channel": channel, "threadAt": int(seconds) * 1000}
+    state = os.path.dirname(THREAD_SESSIONS)
+    record = jload(os.path.join(state, "threads", os.path.basename(cwd) + ".json"))
+    if isinstance(record, dict):
+        thread["lane"] = text(record.get("lane"))
+        session = record.get("session")
+        thread["label"] = text(session.get("label")) if isinstance(session, dict) else None
+    try:
+        memories = os.listdir(os.path.join(state, "memory", "threads"))
+    except Exception:
+        memories = []
+    for name in memories:
+        if seconds + "_" + fraction not in name and seconds + "." + fraction not in name:
+            continue
+        try:
+            with open(os.path.join(state, "memory", "threads", name), "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    found = MEMORY_TOPIC_RE.match(line.strip())
+                    if found:
+                        thread["topic"] = collapse(found.group(2))
+                        break
+        except Exception:
+            pass
+        if thread.get("topic"):
+            break
+    if not thread.get("topic"):
+        thread_ts = seconds + "." + fraction
+        try:
+            with open(os.path.join(state, "events.ndjson"), "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if thread_ts not in line or '"received"' not in line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(event, dict) and event.get("type") == "received" and text(event.get("thread_ts")) == thread_ts:
+                        thread["topic"] = collapse(text(event.get("text")) or "")
+                        break
+        except Exception:
+            pass
+    return thread
+
+
+# The goals file is read unless HERDR_GOALS_FILE names another one.
+RD_PROGRAMS = os.environ.get("HERDR_GOALS_FILE") or os.path.join(
+    HOME, ".claude", "state", "rolling-delivery", "active-programs.json")
+OBJECTIVE_RE = re.compile(r"^\s*([A-Z][A-Z0-9]+-\d+)\s+(.+)$", re.S)
+
+
+def rd_objectives():
+    """Each ticket's rolling-delivery goal, newest program first: {"ABC-123": "goal text"}."""
+    try:
+        with open(RD_PROGRAMS, encoding="utf-8") as handle:
+            programs = json.load(handle).get("programs") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    if not isinstance(programs, list):
+        return {}
+    found = {}
+    for program in sorted((p for p in programs if isinstance(p, dict)), key=lambda p: str(p.get("updated_at") or ""), reverse=True):
+        match = OBJECTIVE_RE.match(str(program.get("objective") or ""))
+        if not match:
+            continue
+        text = re.split(r"\s*\((?:PRD|ADR|설계|https?:)", match.group(2).strip())[0]
+        text = re.sub(r"\s*\([^()]*\)\s*$", "", re.split(r"(?<=[.!?])\s", text)[0]).strip()
+        found.setdefault(match.group(1).upper(), text[:200])
+    return found
+
+
+def identity_path(session_id):
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)
+    return os.path.join(CACHE_DIR, "identity-v2-" + safe + ".json")
+
+
+# What a session is about, read once from the start of its transcript and the files it names; handoff
+# files and prompts change later, so the first answer is cached for the life of the session.
+def session_identity(path, session_id, cwd):
+    cached = jload(identity_path(session_id))
+    if isinstance(cached, dict) and cached.get("final"):
+        return cached.get("identity")
+    identity = {}
+    prompt = first_prompt(path) if path else None
+    if prompt:
+        identity["firstPrompt"] = prompt[:400]
+        handoff = HANDOFF_RE.search(prompt)
+        if handoff:
+            heading = first_heading(handoff.group(1))
+            if heading:
+                identity["handoff"] = heading
+        round_match = ROUND_RE.search(prompt)
+        if round_match:
+            identity["round"] = int(round_match.group(1) or round_match.group(2))
+        paste = PASTE_H1_RE.search(prompt)
+        if paste:
+            identity["paste"] = collapse(paste.group(1))
+    if cwd and os.path.dirname(os.path.normpath(cwd)) == THREAD_SESSIONS:
+        thread = thread_topic(cwd)
+        if thread:
+            identity["thread"] = thread
+    final = bool(prompt) and (not identity.get("thread") or bool(identity["thread"].get("topic")))
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(identity_path(session_id), "w", encoding="utf-8") as f:
+            json.dump({"final": final, "identity": identity}, f, ensure_ascii=False)
+    except Exception:
+        pass
+    return identity
+
+
 def transcript_path(root, cwd, session_id):
     projects = os.path.join(root, "projects")
     name = session_id + ".jsonl"
@@ -724,7 +972,7 @@ def process_environments(pids):
         return {}
     try:
         result = subprocess.run(
-            ["ps", "eww", "-o", "pid=", "-o", "command=", "-p", ",".join(str(p) for p in pids)],
+            [os.environ.get("PULSE_PS") or "ps", "eww", "-o", "pid=", "-o", "command=", "-p", ",".join(str(p) for p in pids)],
             capture_output=True, text=True, timeout=5,
         )
         output = result.stdout
@@ -769,6 +1017,599 @@ def where_of(env):
     if handle:
         return {"kind": "orca", "paneId": None, "socket": None, "handle": handle, "terminalId": None}
     return {"kind": None, "paneId": None, "socket": None, "handle": None, "terminalId": None}
+
+
+def claude_attach_panes():
+    command = [os.environ.get("PULSE_PS") or "ps", "-axww", "-o", "pid=,tty=,etime=,command="]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        output = result.stdout
+    except Exception:
+        return []
+    attached = []
+    for line in output.splitlines():
+        match = re.match(r"^\s*(\d+)\s+(\S+)\s+(\S+)\s+(.*\S)\s*$", line)
+        if not match or match.group(2) in ("??", "-"):
+            continue
+        argv = match.group(4).split()
+        if len(argv) < 3 or os.path.basename(argv[0]) != "claude" or argv[1] != "attach":
+            continue
+        attached.append((int(match.group(1)), argv[2]))
+    environments = process_environments([pid for pid, _ in attached])
+    return [(arg, environments.get(pid) or {}) for pid, arg in attached]
+
+
+# A background session inherits the terminal variables of whoever started the daemon, so its own
+# environment says nothing about where it is. `claude attach` takes the 8-character id, a prefix or the name.
+def claude_bg_where(where, record, session_id, attached):
+    if record.get("kind") != "bg" or not isinstance(session_id, str):
+        return where
+    attach_id = session_id[:8]
+    name = text(record.get("name"))
+    pane = terminal = None
+    for arg, env in attached:
+        if arg == attach_id or session_id.startswith(arg) or (name and arg == name):
+            pane, terminal = env.get("HERDR_PANE_ID"), env.get("HC_TERMINAL_ID")
+            if pane or terminal:
+                break
+    return {"kind": "claude-bg", "paneId": pane, "socket": None, "handle": None, "terminalId": terminal,
+            "attachId": attach_id}
+
+
+# Native Codex and Gemini CLI sessions: their processes (ps), folders (lsof) and own
+# rollout/chat files. Nothing here writes, and a failure here must not hide the Claude sessions.
+
+def elapsed_ms(value):
+    match = ETIME_RE.match(value or "")
+    if not match:
+        return None
+    days, hours, minutes, seconds = match.groups()
+    total = int(seconds) + int(minutes) * 60
+    if hours:
+        total += int(hours) * 3600
+    if days:
+        total += int(days) * 86400
+    return total * 1000
+
+
+def codex_subcommand(argv):
+    index = 1
+    while index < len(argv):
+        arg = argv[index]
+        if arg in CODEX_VALUE_FLAGS:
+            index += 2
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        return arg
+    return None
+
+
+def native_agent_kind(argv):
+    if not argv:
+        return None
+    base = os.path.basename(argv[0].rstrip("/"))
+    if base == "codex":
+        if codex_subcommand(argv) in CODEX_NON_SESSION:
+            return None
+        return "codex"
+    if base == "gemini":
+        return "gemini"
+    if base in ("node", "nodejs"):
+        for arg in argv[1:3]:
+            leaf = os.path.basename(arg)
+            if leaf in ("gemini", "gemini.js") or "@google/gemini-cli" in arg:
+                return "gemini"
+    return None
+
+
+def agent_processes():
+    command = [os.environ.get("PULSE_PS") or "ps", "-axww", "-o", "pid=,tty=,etime=,command="]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        output = result.stdout
+    except Exception:
+        return []
+    found = []
+    for line in output.splitlines():
+        match = re.match(r"^\s*(\d+)\s+(\S+)\s+(\S+)\s+(.*\S)\s*$", line)
+        # An interactive session runs on a terminal; servers the ChatGPT app starts have none.
+        if not match or match.group(2) in ("??", "-"):
+            continue
+        kind = native_agent_kind(match.group(4).split())
+        if not kind:
+            continue
+        elapsed = elapsed_ms(match.group(3))
+        if elapsed is None:
+            continue
+        found.append({"pid": int(match.group(1)), "kind": kind, "startedAt": NOW_MS - elapsed})
+    return found
+
+
+def process_cwds(pids):
+    if not pids:
+        return {}
+    command = [os.environ.get("PULSE_LSOF") or "lsof", "-a", "-p", ",".join(str(p) for p in sorted(pids)),
+               "-d", "cwd", "-Fn"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        output = result.stdout
+    except Exception:
+        return {}
+    cwds = {}
+    pid = None
+    next_cwd = False
+    for line in output.splitlines():
+        if line.startswith("p"):
+            try:
+                pid = int(line[1:])
+            except Exception:
+                pid = None
+            next_cwd = False
+        elif line == "fcwd":
+            next_cwd = True
+        elif line.startswith("n") and next_cwd and pid:
+            value = line[1:].strip()
+            if value.startswith("/"):
+                cwds[pid] = value
+            next_cwd = False
+    return cwds
+
+
+def file_mtime_ms(path):
+    try:
+        return int(os.stat(path).st_mtime * 1000)
+    except Exception:
+        return None
+
+
+def head_lines(path, limit=HEAD_BYTES):
+    try:
+        with open(path, "rb") as f:
+            data = f.read(limit)
+        return data.decode("utf-8", "replace").split("\n")
+    except Exception:
+        return []
+
+
+def codex_day_dirs():
+    base = os.path.join(HOME, ".codex", "sessions")
+    found = []
+    try:
+        years = [name for name in os.listdir(base) if DAY_DIR_RE.match(name)]
+    except Exception:
+        return []
+    for year in years:
+        year_path = os.path.join(base, year)
+        try:
+            months = [name for name in os.listdir(year_path) if DAY_DIR_RE.match(name)]
+        except Exception:
+            continue
+        for month in months:
+            month_path = os.path.join(year_path, month)
+            try:
+                days = [name for name in os.listdir(month_path) if DAY_DIR_RE.match(name)]
+            except Exception:
+                continue
+            for day in days:
+                found.append(((int(year), int(month), int(day)), os.path.join(month_path, day)))
+    found.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in found[:4]]
+
+
+# Newest first, and only files written since the process started (a rollout from an earlier
+# run of the same folder is not this process's).
+def codex_rollout_paths(started_at):
+    candidates = []
+    for directory in codex_day_dirs():
+        try:
+            names = os.listdir(directory)
+        except Exception:
+            continue
+        for name in names:
+            if not ROLLOUT_RE.match(name):
+                continue
+            path = os.path.join(directory, name)
+            mtime = file_mtime_ms(path)
+            if mtime is not None and started_at - 5000 <= mtime:
+                candidates.append((mtime, path))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in candidates]
+
+
+def codex_meta(path):
+    for line in head_lines(path):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(record, dict) and record.get("type") == "session_meta":
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            return {
+                "sessionId": text(payload.get("session_id")) or text(payload.get("id")),
+                "cwd": text(payload.get("cwd")),
+                "timestamp": iso_ms(record.get("timestamp")),
+            }
+    return None
+
+
+def agent_prompt(value, codex=False):
+    if not isinstance(value, str):
+        return None
+    if codex:
+        match = CODEX_REQUEST_RE.search(value)
+        if match:
+            value = value[match.end():]
+    value = collapse(value)
+    return value[:400] if value else None
+
+
+# Codex CLI builds without event_msg/user_message record the prompt only as a user
+# response_item, beside injected context (AGENTS.md, <environment_context>) of the same shape.
+def codex_item_prompt(payload):
+    if payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    parts = payload.get("content") if isinstance(payload.get("content"), list) else []
+    value = "\n".join(text(part.get("text")) or "" for part in parts if isinstance(part, dict)).strip()
+    if not value or value.startswith(("<", "# AGENTS.md instructions")):
+        return None
+    return agent_prompt(value, True)
+
+
+def native_summary():
+    return {
+        "customTitle": None, "agentName": None, "lastPrompt": None,
+        "lastAnswer": None, "lastSentence": None, "currentAction": None,
+        "lastToolName": None, "lastToolAt": None, "lastMeaningfulAt": None,
+        "pr": None,
+    }
+
+
+def native_record(proc, agent, session_id, cwd, env, status,
+                  started_at, status_at, last_meaningful, identity, summary):
+    when = last_meaningful if last_meaningful is not None else started_at
+    return {
+        "t": "s",
+        "pid": proc["pid"],
+        "sessionId": session_id,
+        "cwd": cwd,
+        "name": None,
+        "kind": None,
+        "jobId": None,
+        "parkedJobId": None,
+        "status": status,
+        "waitingFor": None,
+        "startedAt": started_at,
+        "updatedAt": when,
+        "statusUpdatedAt": status_at if status_at is not None else when,
+        "location": short_location(cwd, HOME),
+        "identity": identity,
+        **summary,
+        "background": {"shells": 0, "agents": 0, "monitors": 0, "total": 0},
+        "completed": [],
+        "deadhd": None,
+        "pages": [],
+        "where": where_of(env),
+        "agent": agent,
+    }
+
+
+def synthetic_session_id(agent, proc, started_at):
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "%s:%d:%s" % (agent, proc["pid"], int(started_at / 1000))))
+
+
+# A long turn can push its task_started out of the tail, so the last turn event is looked for
+# further back, a block at a time, up to TURN_SCAN_BYTES.
+TURN_SCAN_BYTES = 32 * 1024 * 1024
+
+
+def last_turn_event(path):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            carry = b""
+            scanned = 0
+            while end > 0 and scanned < TURN_SCAN_BYTES:
+                start = max(0, end - 1024 * 1024)
+                f.seek(start)
+                block = f.read(end - start) + carry
+                lines = block.split(b"\n")
+                carry = lines[0] if start > 0 else b""
+                body = lines[1:] if start > 0 else lines
+                for raw in reversed(body):
+                    if b'"task_started"' not in raw and b'"task_complete"' not in raw:
+                        continue
+                    try:
+                        record = json.loads(raw.decode("utf-8", "replace"))
+                    except Exception:
+                        continue
+                    payload = record.get("payload") if isinstance(record, dict) else None
+                    if record.get("type") == "event_msg" and isinstance(payload, dict) \
+                            and payload.get("type") in ("task_started", "task_complete"):
+                        return payload.get("type"), iso_ms(record.get("timestamp"))
+                scanned += end - start
+                end = start
+    except Exception:
+        return None, None
+    return None, None
+
+
+def codex_record(proc, cwd, env, meta_cache, taken=None):
+    started_at = proc["startedAt"]
+    path = None
+    meta = None
+    taken = taken if taken is not None else set()
+    for candidate in codex_rollout_paths(started_at):
+        if candidate in taken:
+            continue
+        if candidate in meta_cache:
+            info = meta_cache[candidate]
+        else:
+            info = codex_meta(candidate)
+            meta_cache[candidate] = info
+        if info and info.get("cwd") and os.path.normpath(info["cwd"]) == os.path.normpath(cwd):
+            path, meta = candidate, info
+            taken.add(candidate)
+            break
+    summary = native_summary()
+    if path is None:
+        return native_record(proc, "codex", synthetic_session_id("codex", proc, started_at), cwd, env,
+                             "idle", started_at, started_at, None, {}, summary)
+
+    session_id = meta.get("sessionId") or synthetic_session_id("codex", proc, started_at)
+    session_start = meta.get("timestamp") if isinstance(meta.get("timestamp"), int) else started_at
+    open_turn = None
+    saw_turn_event = False
+    saw_user_event = False
+    last_turn_at = None
+    last_tool = None
+    last_tool_at = None
+    last_meaningful = None
+    for line in tail_lines(path):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        stamp = iso_ms(record.get("timestamp"))
+        if stamp is not None:
+            last_meaningful = stamp
+        if record.get("type") == "event_msg":
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            kind = payload.get("type")
+            if kind in ("task_started", "task_complete"):
+                saw_turn_event = True
+            if kind == "task_started":
+                open_turn = payload.get("turn_id") or "turn"
+                last_turn_at = stamp if stamp is not None else ms_num(payload.get("started_at"))
+                if last_turn_at is not None and last_turn_at < 100000000000:
+                    last_turn_at = last_turn_at * 1000
+            elif kind == "task_complete":
+                turn = payload.get("turn_id") or "turn"
+                if open_turn == turn:
+                    open_turn = None
+                last_turn_at = stamp if stamp is not None else last_turn_at
+                answer = text(payload.get("last_agent_message"))
+                error = payload.get("error")
+                if answer:
+                    summary["lastAnswer"] = collapse(answer)[:400]
+                elif isinstance(error, dict) and text(error.get("message")):
+                    summary["lastAnswer"] = ("Error: " + collapse(text(error.get("message"))))[:400]
+                if summary["lastAnswer"]:
+                    summary["lastSentence"] = last_sentence(summary["lastAnswer"])
+            elif kind == "user_message":
+                saw_user_event = True
+                value = agent_prompt(payload.get("message"), True)
+                if value:
+                    summary["lastPrompt"] = value
+        elif record.get("type") == "response_item":
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            item_prompt = codex_item_prompt(payload)
+            if item_prompt and not saw_user_event:
+                summary["lastPrompt"] = item_prompt
+            if payload.get("type") in CODEX_TOOL_TYPES:
+                name = text(payload.get("name"))
+                if name:
+                    last_tool = name
+                    last_tool_at = stamp
+    if not saw_turn_event:
+        kind, stamp = last_turn_event(path)
+        if kind == "task_started":
+            open_turn = "turn"
+        if kind:
+            last_turn_at = stamp
+    status = "busy" if open_turn is not None else "idle"
+    summary["currentAction"] = last_tool if status == "busy" else None
+    summary["lastToolName"] = last_tool
+    summary["lastToolAt"] = last_tool_at
+    summary["lastMeaningfulAt"] = last_meaningful
+
+    first = None
+    first_item = None
+    for line in head_lines(path):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        if record.get("type") == "response_item" and first_item is None:
+            first_item = codex_item_prompt(payload)
+        if record.get("type") == "event_msg" and payload.get("type") == "user_message":
+            first = agent_prompt(payload.get("message"), True)
+            if first:
+                break
+    first = first or first_item
+    identity = {"firstPrompt": first} if first else {}
+    return native_record(proc, "codex", session_id, cwd, env, status, session_start,
+                         last_turn_at, last_meaningful, identity, summary)
+
+
+def gemini_slots(cwd):
+    names = []
+    try:
+        names.append(hashlib.sha256(os.path.abspath(cwd).encode("utf-8")).hexdigest())
+    except Exception:
+        pass
+    projects = jload(os.path.join(HOME, ".gemini", "projects.json"))
+    if isinstance(projects, dict):
+        for key, value in projects.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                continue
+            if os.path.normpath(key) == os.path.normpath(cwd) and value.strip():
+                names.append(value.strip())
+    slots = []
+    for name in names:
+        if "/" in name or name in (".", ".."):
+            continue
+        path = os.path.join(HOME, ".gemini", "tmp", name)
+        if path not in slots:
+            slots.append(path)
+    return slots
+
+
+def gemini_chat_path(cwd, started_at):
+    candidates = []
+    for slot in gemini_slots(cwd):
+        chats = os.path.join(slot, "chats")
+        try:
+            names = os.listdir(chats)
+        except Exception:
+            continue
+        for name in names:
+            if not (name.endswith(".jsonl") or (name.startswith("session-") and name.endswith(".json"))):
+                continue
+            path = os.path.join(chats, name)
+            mtime = file_mtime_ms(path)
+            if mtime is not None and started_at - 5000 <= mtime:
+                candidates.append((mtime, path))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1] if candidates else None
+
+
+def gemini_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict) and isinstance(content.get("text"), str):
+        return content["text"]
+    if isinstance(content, list):
+        parts = [block["text"] for block in content
+                 if isinstance(block, dict) and isinstance(block.get("text"), str)]
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def stamp_ms(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value) if value > 0 else None
+    return iso_ms(value)
+
+
+def gemini_messages(lines, state):
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        kind = record.get("type")
+        if kind == "session_metadata":
+            state["sessionId"] = text(record.get("sessionId")) or state["sessionId"]
+            state["startedAt"] = stamp_ms(record.get("startTime")) or state["startedAt"]
+        elif kind in ("user", "gemini"):
+            content = gemini_text(record.get("content"))
+            stamp = stamp_ms(record.get("timestamp"))
+            if stamp is not None:
+                state["lastAt"] = stamp
+            if content and content.strip():
+                state["messages"].append((kind, content, stamp))
+
+
+def gemini_record(proc, cwd, env):
+    started_at = proc["startedAt"]
+    path = gemini_chat_path(cwd, started_at)
+    summary = native_summary()
+    if path is None:
+        return native_record(proc, "gemini", synthetic_session_id("gemini", proc, started_at), cwd, env,
+                             "idle", started_at, started_at, None, {}, summary)
+
+    state = {"sessionId": None, "startedAt": None, "lastAt": None, "messages": []}
+    if path.endswith(".jsonl"):
+        gemini_messages(tail_lines(path), state)
+        head = {"messages": [], "sessionId": state["sessionId"], "startedAt": state["startedAt"], "lastAt": None}
+        gemini_messages(head_lines(path), head)
+        first = next((content for kind, content, _ in head["messages"] if kind == "user"), None)
+        state["sessionId"] = state["sessionId"] or head["sessionId"]
+        state["startedAt"] = state["startedAt"] or head["startedAt"]
+    else:
+        data = jload(path)
+        records = []
+        if isinstance(data, dict):
+            state["sessionId"] = text(data.get("sessionId"))
+            state["startedAt"] = stamp_ms(data.get("startTime"))
+            messages = data.get("messages")
+            if isinstance(messages, list):
+                records = [record for record in messages if isinstance(record, dict)]
+        gemini_messages([json.dumps(record) for record in records], state)
+        first = next((content for kind, content, _ in state["messages"] if kind == "user"), None)
+
+    messages = state["messages"]
+    last_kind = next((kind for kind, _, _ in reversed(messages) if kind in ("user", "gemini")), None)
+    status = "busy" if last_kind == "user" else "idle"
+    session_id = state["sessionId"] or synthetic_session_id("gemini", proc, started_at)
+    session_start = state["startedAt"] if state["startedAt"] is not None else started_at
+    last_meaningful = state["lastAt"] if state["lastAt"] is not None else file_mtime_ms(path)
+    for kind, content, _ in messages:
+        if kind == "user":
+            summary["lastPrompt"] = agent_prompt(content)
+        else:
+            summary["lastAnswer"] = agent_prompt(content)
+            summary["lastSentence"] = last_sentence(content)
+    summary["lastMeaningfulAt"] = last_meaningful
+    identity = {"firstPrompt": agent_prompt(first)} if first else {}
+    return native_record(proc, "gemini", session_id, cwd, env, status, session_start,
+                         last_meaningful, last_meaningful, identity, summary)
+
+
+def native_agent_sessions():
+    processes = agent_processes()
+    if not processes:
+        return []
+    pids = [proc["pid"] for proc in processes]
+    environments = process_environments(pids)
+    cwds = process_cwds(pids)
+    meta_cache = {}
+    taken = set()
+    sessions = []
+    # Newest process first, so two codex in one folder take the newest rollouts in turn.
+    for proc in sorted(processes, key=lambda item: -(item.get("startedAt") or 0)):
+        cwd = cwds.get(proc["pid"])
+        if not cwd:
+            continue
+        env = environments.get(proc["pid"]) or {}
+        try:
+            if proc["kind"] == "codex":
+                sessions.append(codex_record(proc, cwd, env, meta_cache, taken))
+            else:
+                sessions.append(gemini_record(proc, cwd, env))
+        except Exception:
+            continue
+    return sessions
 
 
 def main():
@@ -821,6 +1662,9 @@ def main():
                 continue
             if record.get("entrypoint") != "cli":
                 continue
+            # Claude Code pre-starts an idle "spare" bg worker beside each fork; it is no session yet.
+            if record.get("spare") is True and record.get("status") == "idle":
+                continue
             if not process_alive(pid):
                 continue
             if session_id in seen_ids:
@@ -830,10 +1674,14 @@ def main():
 
     read_error = primary_error if readable_roots == 0 else None
     environments = process_environments([pid for _, _, _, pid in records])
+    attached = claude_attach_panes() if any(record.get("kind") == "bg" for _, record, _, _ in records) else []
     pages, unreadable_pages = page_alerts()
 
+    accounts_prefix = os.path.normpath(accounts) + os.sep
     output_sessions = []
     for root, record, session_id, pid in records:
+        normalized_root = os.path.normpath(root)
+        account = os.path.basename(normalized_root) if normalized_root.startswith(accounts_prefix) else "default"
         cwd = record.get("cwd") if isinstance(record.get("cwd"), str) else None
         started_at = ms_num(record.get("startedAt"))
         transcript = transcript_path(root, cwd, session_id)
@@ -845,7 +1693,7 @@ def main():
         background, completed = ledger_for(transcript, session_id, started_at) if transcript else (
             {"shells": 0, "agents": 0, "monitors": 0, "total": 0}, [])
         env = environments.get(pid) or {}
-        where = where_of(env)
+        where = claude_bg_where(where_of(env), record, session_id, attached)
         page_list = []
         for page in pages:
             if page["sessionId"]:
@@ -859,21 +1707,39 @@ def main():
             "sessionId": session_id,
             "cwd": cwd,
             "name": text(record.get("name")),
+            "kind": text(record.get("kind")),
+            "jobId": text(record.get("jobId")),
+            "parkedJobId": text(record.get("parkedJobId")),
             "status": text(record.get("status")),
             "waitingFor": text(record.get("waitingFor")),
             "startedAt": started_at,
             "updatedAt": ms_num(record.get("updatedAt")),
             "statusUpdatedAt": ms_num(record.get("statusUpdatedAt")),
             "location": short_location(cwd, HOME),
+            "identity": session_identity(transcript, session_id, cwd),
             **summary,
             "background": background,
             "completed": completed,
             "deadhd": deadhd_state(session_id),
             "pages": page_list,
             "where": where,
+            "agent": "claude",
+            "account": account,
         })
 
+    try:
+        native = native_agent_sessions()
+    except Exception:
+        native = []
+    emitted = set(session["sessionId"] for session in output_sessions)
+    for session in native:
+        if session["sessionId"] in emitted:
+            continue
+        emitted.add(session["sessionId"])
+        output_sessions.append(session)
+
     for session in output_sessions:
+        session.setdefault("repo", repo_of(session.get("cwd")))
         emit(session)
     emit({
         "t": "meta",
@@ -882,6 +1748,7 @@ def main():
         "error": read_error,
         "pages": pages,
         "unreadablePages": unreadable_pages,
+        "objectives": rd_objectives(),
     })
 
 
