@@ -603,9 +603,33 @@ HANDOFF_RE = re.compile(r"(/[^\s`'\"]+/\.claude/handoff/[\w.-]+\.md)")
 ROUND_RE = re.compile(r"(\d+)\s*회차|\bround\s+(\d+)\b", re.IGNORECASE)
 PASTE_H1_RE = re.compile(r"<pasted_content[^>]*>\s*#\s+([^\n#<]+)")
 ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
-# The thread-memory folder is read unless HERDR_THREAD_SESSIONS names another one.
-THREAD_SESSIONS = os.environ.get("HERDR_THREAD_SESSIONS") or os.path.join(
-    HOME, ".claude", "state", "maveyyo-bot", "sessions")
+# The thread-memory folder and the goals file are optional inputs: the environment names the
+# path first, then ${XDG_CONFIG_HOME:-$HOME/.config}/herdr-shared/scan.json, and with neither
+# that reader is off.
+CONFIG_PATH = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "herdr-shared", "scan.json")
+
+
+def scan_config():
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+CONFIG = scan_config()
+
+
+def configured_path(key):
+    value = CONFIG.get(key)
+    if not isinstance(value, str) or not value:
+        return None
+    return HOME + value[1:] if value == "~" or value.startswith("~/") else value
+
+
+THREAD_SESSIONS = os.environ.get("HERDR_THREAD_SESSIONS") or configured_path("threadSessions")
 THREAD_KEY_RE = re.compile(r"^([A-Z0-9]+)-(\d+)_(\d+)$")
 MEMORY_TOPIC_RE = re.compile(r"^-\s*(질문|원글):\s*(.+)$")
 
@@ -655,6 +679,8 @@ def first_heading(path):
 
 
 def thread_topic(cwd):
+    if not THREAD_SESSIONS:
+        return None
     match = THREAD_KEY_RE.match(os.path.basename(cwd))
     if not match:
         return None
@@ -703,14 +729,14 @@ def thread_topic(cwd):
     return thread
 
 
-# The goals file is read unless HERDR_GOALS_FILE names another one.
-RD_PROGRAMS = os.environ.get("HERDR_GOALS_FILE") or os.path.join(
-    HOME, ".claude", "state", "rolling-delivery", "active-programs.json")
+RD_PROGRAMS = os.environ.get("HERDR_GOALS_FILE") or configured_path("goalsFile")
 OBJECTIVE_RE = re.compile(r"^\s*([A-Z][A-Z0-9]+-\d+)\s+(.+)$", re.S)
 
 
 def rd_objectives():
-    """Each ticket's rolling-delivery goal, newest program first: {"ABC-123": "goal text"}."""
+    """Each ticket's goal from the goals file, newest program first: {"ABC-123": "goal text"}."""
+    if not RD_PROGRAMS:
+        return {}
     try:
         with open(RD_PROGRAMS, encoding="utf-8") as handle:
             programs = json.load(handle).get("programs") or []
@@ -755,7 +781,7 @@ def session_identity(path, session_id, cwd):
         paste = PASTE_H1_RE.search(prompt)
         if paste:
             identity["paste"] = collapse(paste.group(1))
-    if cwd and os.path.dirname(os.path.normpath(cwd)) == THREAD_SESSIONS:
+    if cwd and THREAD_SESSIONS and os.path.dirname(os.path.normpath(cwd)) == THREAD_SESSIONS:
         thread = thread_topic(cwd)
         if thread:
             identity["thread"] = thread
