@@ -8,7 +8,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { agents, spaces, focused, run, setAgentOrder, props } from "herdr";
+import { agents, spaces, focused, run, setAgentOrder, props, checking } from "herdr";
 
 // One night-console ramp; status color marks the runway lights and the planes, amber the selection.
 const INK = {
@@ -33,7 +33,8 @@ export default class Tower extends View {
   init(_props, cx) {
     this.role = props()?.role ?? "lanes";
     this.since = {}; // address -> { s, at }
-    if (this.role === "head") return;
+    // No repaint timer under herdr-app check.
+    if (this.role === "head" || checking()) return;
     cx.timer.every(30000, (cx) => cx.notify());
   }
 

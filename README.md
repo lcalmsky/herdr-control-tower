@@ -11,16 +11,18 @@ The preview and the animation use made-up agents and terminals. They are rendere
 Paste this into an agent running in Herdr:
 
 ```
-Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/lcalmsky/herdr-control-tower
+Read ~/.config/herdr-app/AGENTS.md, then add this layout and copy its themes/control-tower.json to ~/.config/herdr-app/themes/: https://github.com/lcalmsky/herdr-control-tower
 ```
+
+By hand: copy `layouts/control-tower.json` and `layouts/control-tower.png` to `~/.config/herdr-app/layouts/`, each folder in `mods/` to `~/.config/herdr-app/mods/`, and `themes/control-tower.json` to `~/.config/herdr-app/themes/`.
 
 The shared runtime files in the mod folders are copies from the [`herdr-shared`](https://github.com/lcalmsky/herdr-shared) submodule at `vendor/herdr-shared`. A plain clone already has the copies; `git clone --recursive` is only needed for the drift check.
 
 Before adding it, know what the mods run and read outside their folders:
 
 - the `pulse` mod runs `sh mods/pulse/scan.sh` every 3 s. The script reads Claude Code's session records and transcripts under `~/.claude` (or `$CLAUDE_CONFIG_DIR`) and under each `~/.claude-accounts/*` that has a `sessions/` folder; the handoff file a session's first prompt names; thread memory and a per-ticket goals file when configured (`$HERDR_THREAD_SESSIONS` / `$HERDR_GOALS_FILE`, else the `threadSessions` / `goalsFile` keys of `~/.config/herdr-shared/scan.json`); Codex rollout logs under `~/.codex/sessions` and Gemini chat files under `~/.gemini`; the deadhd checklist state under `/tmp/deadhd-state` (or `$DEADHD_STATE_DIR`); page alerts under `~/.pulse/pages` (or `$PULSE_PAGES_DIR`); and the environment of the session processes through `ps` and `lsof`, for the pane, tab, workspace and Orca handle variables. It writes only a ledger and identity cache under `${TMPDIR:-/tmp}/herdr-pulse`, and it never opens `*.key` files.
-- the `pulse` view runs `tmux` to switch a session, the Orca CLI at `/Applications/Orca.app/Contents/Resources/bin/orca`, `open` for page URLs and `open -a Orca`, and `rm -f` on the page-alert files after it opens them. Pages open in your browser.
-- `tower` reads Herdr's own agent and space state and runs no programs. `tower-rail` also reads that state; every 30 s it runs `git -C <terminal cwd> rev-parse --path-format=absolute --git-common-dir --show-toplevel` for each distinct terminal cwd, which reads git metadata outside the mod folder, and it reorders spaces with `space.move` so each repository's spaces sit together (base checkout first).
+- the `pulse` view runs `tmux` to switch a session, the Orca CLI at `/Applications/Orca.app/Contents/Resources/bin/orca`, `open` for page URLs and `open -a Orca`, and `rm -f` on the page-alert files after it opens them. Opening a background Claude Code session with no attached pane runs `claude attach <id>` in a pane split right of the focused one, so `claude` runs there too. Pages open in your browser.
+- `tower` reads Herdr's own agent and space state and runs no programs. `tower-rail` also reads that state; every 30 s it runs `git -C <terminal cwd> rev-parse --path-format=absolute --git-common-dir --show-toplevel` for each distinct terminal cwd, which reads git metadata outside the mod folder. For a space on another Herdr machine the same command runs on that machine (5 s timeout), and repositories are keyed by machine, so the same path on two machines is never one repository. The rail reorders spaces with `space.move` so each repository's spaces sit together (base checkout first).
 
 Pulse's focus key is not shipped with this repo. To give the panel the keyboard, add `"ctrl-alt-p": "pulse.toggle"` to the `global` section of your Herdr `keys.json`.
 

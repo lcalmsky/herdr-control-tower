@@ -1,10 +1,11 @@
-// Renders preview.png (1600x960 at 1.5x) and demo.gif (168 frames at 20 fps, 1200x720) from art/preview.html.
+// Renders preview.png (1600x960 at 1.5x), demo.gif (168 frames at 20 fps, 1200x720) from art/preview.html,
+// and layouts/control-tower.png (640x400), the thumbnail Herdr's layout picker shows, from preview.png.
 // Needs playwright-core, Google Chrome and ffmpeg. Run from the repo root:
 //   npm i --no-save --prefix /tmp/tower-render playwright-core
 //   NODE_PATH=/tmp/tower-render/node_modules node art/render.mjs
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -24,6 +25,9 @@ async function page(scale) {
 const still = await page(1.5);
 await still.evaluate(() => setT(0));
 await (await still.$("#win")).screenshot({ path: join(root, "preview.png") });
+const thumb = await browser.newPage({ viewport: { width: 640, height: 400 } });
+await thumb.setContent(`<style>html,body{margin:0}img{width:640px;height:400px;display:block}</style><img src="data:image/png;base64,${readFileSync(join(root, "preview.png")).toString("base64")}">`, { waitUntil: "load" });
+await thumb.screenshot({ path: join(root, "layouts/control-tower.png") });
 
 const anim = await page(0.75);
 const win = await anim.$("#win");
@@ -38,4 +42,4 @@ execFileSync("ffmpeg", ["-v", "error", "-y", ...input, "-vf", "palettegen=stats_
 execFileSync("ffmpeg", ["-v", "error", "-y", ...input, "-i", join(frames, "pal.png"),
   "-lavfi", "paletteuse=dither=none:diff_mode=rectangle", "-loop", "0", join(root, "demo.gif")]);
 rmSync(frames, { recursive: true });
-console.log("preview.png and demo.gif written");
+console.log("preview.png, demo.gif and layouts/control-tower.png written");

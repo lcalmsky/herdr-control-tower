@@ -6,7 +6,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex } from "gpui-base";
-import { spaces, agents, terminals, panes, exec, run, openOverlay, props } from "herdr";
+import { spaces, agents, terminals, panes, exec, run, openOverlay, props, checking } from "herdr";
 
 const INK = { rail: "#07080d", card: "#11141c", raised: "#1a1e28", hover: "#161a24", line: "#1d212b", sep: "#3a4050", t1: "#eef0f5", t2: "#a3a9b8", t3: "#7a8296", amber: "#f2a93b" };
 const DOT = { blocked: "#e5484d", done: "#4cc38a" };
@@ -16,6 +16,8 @@ const IDLE_MS = 10 * 60 * 1000;
 const REPO_MS = 30 * 1000;
 // Trunk positions in the 16 px gutter left of the tiles; a third overlapping repo gets no lines.
 const LANES = [8, 3];
+// The same path on two machines is two repositories, so a repo is addressed by machine and path.
+const repoKey = (machine, path) => `${machine ?? ""}\n${path}`;
 
 function quiet(ms) {
   const m = Math.floor(ms / 60000);
@@ -29,25 +31,36 @@ export default class TowerRail extends View {
     this.turns = {};
     this.repos = {};
     this.reading = false;
+    // herdr-app check runs init for real: no git and no space.move there.
+    if (checking()) return;
     cx.timer.every(REPO_MS, (cx) => this.readRepos(cx));
     cx.timer.every(30000, (cx) => cx.notify());
     this.readRepos(cx);
   }
 
-  // SpaceInfo.folder is where new terminals start, not where they are, so the repo comes from a terminal's cwd.
+  // SpaceInfo.folder is where new terminals start, not where they are, so the repo comes from a terminal's
+  // cwd; git runs on that space's machine, and the repo is keyed with it.
   readRepos(cx) {
-    if (this.reading) return;
+    if (this.reading || checking()) return;
     this.reading = true;
-    const folders = [...new Set(terminals().map((t) => t.cwd).filter(Boolean))];
+    const byAddress = new Map(terminals().map((t) => [t.address, t]));
+    const paneList = panes();
+    const targets = new Map();
+    for (const s of spaces()) {
+      for (const t of this.spaceTerminals(s, byAddress, paneList)) {
+        if (t.cwd) targets.set(repoKey(s.machine, t.cwd), { machine: s.machine ?? null, cwd: t.cwd });
+      }
+    }
     cx.spawn(async (later) => {
       const next = {};
-      for (const cwd of folders) {
+      // Serial and `reading` blocks the next read, so an unreachable machine must not hold it long.
+      for (const [k, { machine, cwd }] of targets) {
         try {
-          const r = await exec("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"]);
+          const r = await exec("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"], { on: machine, timeout: 5000 });
           const [common, top] = String(r.stdout ?? "").trim().split("\n");
-          next[cwd] = r.code === 0 && common ? { common, base: Boolean(top) && `${top}/.git` === common } : null;
+          next[k] = r.code === 0 && common ? { common, base: Boolean(top) && `${top}/.git` === common, key: repoKey(machine, common) } : null;
         } catch {
-          next[cwd] = null;
+          next[k] = null;
         }
       }
       this.repos = next;
@@ -65,7 +78,7 @@ export default class TowerRail extends View {
     return spaces().map((s) => {
       const mine = this.spaceTerminals(s, byAddress, paneList);
       const cwd = mine.find((t) => t.cwd)?.cwd ?? null;
-      return { space: s, mine, repo: cwd ? this.repos[cwd] : null };
+      return { space: s, mine, repo: cwd ? this.repos[repoKey(s.machine, cwd)] : null };
     });
   }
 
@@ -76,7 +89,7 @@ export default class TowerRail extends View {
     if (rows.some((row) => row.repo === undefined)) return;
     const groups = new Map();
     for (const row of rows) {
-      const key = row.repo?.common ?? row.space.id;
+      const key = row.repo?.key ?? row.space.id;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(row);
     }
@@ -117,8 +130,8 @@ export default class TowerRail extends View {
     const groups = new Map();
     rows.forEach((row, i) => {
       if (!row.repo) return;
-      if (!groups.has(row.repo.common)) groups.set(row.repo.common, []);
-      groups.get(row.repo.common).push(i);
+      if (!groups.has(row.repo.key)) groups.set(row.repo.key, []);
+      groups.get(row.repo.key).push(i);
     });
     const cy = (i) => i * (TILE + GAP) + TILE / 2;
     const lines = [];
@@ -175,7 +188,7 @@ export default class TowerRail extends View {
         .when(idle > 0, (el) => el.child(div().absolute().bottom(-3).right(-3).size(10).rounded(5)
           .bg(INK.rail).border(1.5).border_color(INK.t3)));
     };
-    return v_flex().size_full().pt(44).items_center()
+    return v_flex().id("rail-tiles").size_full().pt(44).pb(4).items_center().overflow_y_scroll()
       .child(v_flex().relative().w_full().items_center().gap(GAP).flex_none()
         .children(this.branches(rows))
         .children(rows.map(tile)));

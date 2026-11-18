@@ -7,7 +7,7 @@
 
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { agents, terminals, focused, run, exec, props, appHome, openOverlay, closeOverlay } from "herdr";
+import { agents, terminals, focused, spaces, run, exec, props, appHome, openOverlay, closeOverlay, checking } from "herdr";
 
 const INK = {
   ink: "#07080d", card: "#11141c", raised: "#1a1e28", selected: "#161a24", line: "#1d212b",
@@ -18,6 +18,7 @@ const FONT = "Nunito";
 // Account names go into a shell command line, so only these characters are accepted anywhere.
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
 const RESERVED = new Set(["ls", "add", "share", "help"]);
+const REMOTE = "Accounts live on this computer: focus one of its panes first.";
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Herdr has no API for a mod's own folder; the app home is where Herdr keeps mods.
@@ -76,6 +77,8 @@ export default class ClaudeAccounts extends View {
       return;
     }
     if (this.role === "menu") this.handle = cx.focus_handle();
+    // herdr-app check runs init for real: neither the timer nor the first read may start there.
+    if (checking()) return;
     cx.timer.every(30000, (cx) => this.readAccounts(cx));
     this.readAccounts(cx);
   }
@@ -90,8 +93,18 @@ export default class ClaudeAccounts extends View {
     return claude ? t?.foreground?.pid ?? null : null;
   }
 
+  // The accounts and cca live on this computer; a split of another machine's pane would start Claude there.
+  remoteFocus() {
+    const f = focused();
+    if (!f) return false;
+    const space = spaces().find((s) => s.id === f.space);
+    return Boolean(space?.machine) || String(f.pane ?? "").includes("/");
+  }
+
   readAccounts(cx, pid = this.focusedPid()) {
-    if (this.readingAccounts) return;
+    // chip() and rail() call this from render when the focus key differs, so the init guard alone is not enough.
+    if (checking()) return;
+    if (this.readingAccounts) { this.rereadAccounts = true; return; }
     this.focusKey = pid == null ? "" : String(pid);
     const key = this.focusKey;
     this.readingAccounts = true;
@@ -137,9 +150,12 @@ export default class ClaudeAccounts extends View {
         this.readError = `cca not found: ${cca()}`;
       }
       cx.notify();
-      // A focus change that landed during the read is picked up here, not on the 30 s timer.
+      // A read asked for while this one ran (a use or rename right after a timer read), or a focus change
+      // that landed meanwhile, runs now rather than on the 30 s timer.
+      const again = this.rereadAccounts;
+      this.rereadAccounts = false;
       const now = this.focusedPid();
-      if ((now == null ? "" : String(now)) !== this.focusKey) this.readAccounts(cx, now);
+      if (again || (now == null ? "" : String(now)) !== this.focusKey) this.readAccounts(cx, now);
     });
   }
 
@@ -161,6 +177,7 @@ export default class ClaudeAccounts extends View {
     if (!ACCOUNT_NAME.test(name)) { this.error = "Use letters, digits, - or _."; this.cx.notify(); return; }
     if (name === "default") { this.error = "default is the ~/.claude account."; this.cx.notify(); return; }
     if (RESERVED.has(name) || name.startsWith("-")) { this.error = `${name} is a cca command.`; this.cx.notify(); return; }
+    if (this.remoteFocus()) { this.error = REMOTE; this.cx.notify(); return; }
     this.busy = true;
     this.error = null;
     this.cx.notify();
@@ -337,9 +354,10 @@ export default class ClaudeAccounts extends View {
     const env = name === "default"
       ? "unset CLAUDE_CONFIG_DIR; CCA_ACCOUNT=default"
       : `CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/${name}" CCA_ACCOUNT=${name}`;
-    // pane.split takes no folder, so the shell changes into the session's cwd first.
+    // pane.split takes no folder, so the shell changes into the session's cwd first and stops if it can't
+    // (the default env's `;` would end an `&&` chain and still start Claude in the wrong folder).
     const cwd = `'${session.cwd.replace(/'/g, "'\\''")}'`;
-    run("pane.split", { direction: "right", argv: ["sh", "-lc", `cd ${cwd} && ${env} exec claude --resume ${session.id}`] });
+    run("pane.split", { direction: "right", argv: ["sh", "-lc", `cd ${cwd} || exit 1; ${env} exec claude --resume ${session.id}`] });
   }
 
   // Makes the account new sessions start under; the popup stays open so the radio follows.
@@ -442,7 +460,7 @@ export default class ClaudeAccounts extends View {
     };
     const resumeRow = (a) => h_flex().id(`cont-${a.name}`).h(32).flex_none().px(8).rounded(8).gap(8).items_center().cursor_pointer()
       .hover((h) => h.bg(INK.selected)).tooltip(`Resume this session as ${display(a)}`)
-      .on_click(() => { closeOverlay(props().overlay); this.continueAs(a.name, this.session); })
+      .on_click((_e, cx) => { if (this.remoteFocus()) { this.actionError = REMOTE; cx.notify(); return; } closeOverlay(props().overlay); this.continueAs(a.name, this.session); })
       .child(div().w(14).flex_none())
       .child(this.avatar(display(a), 20, 10))
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_family(FONT).font_bold().text_color(INK.t2).child(display(a)))

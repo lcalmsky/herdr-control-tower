@@ -25,6 +25,7 @@ async function loadPulse() {
       export const h_flex = () => ({});
       export const v_virtual_list = () => ({});
       export class VirtualListScrollHandle {}
+      export class ScrollHandle { static new() { return {}; } }
     `,
     herdr: `
       export const exec = async () => ({ code: 0, stdout: "", stderr: "" });
@@ -33,6 +34,8 @@ async function loadPulse() {
       export const terminals = () => [];
       export const panes = () => [];
       export const nextCommand = () => new Promise(() => {});
+      export const checking = () => false;
+      export const focused = () => null;
     `,
   };
   for (const [name, body] of Object.entries(stubs)) {

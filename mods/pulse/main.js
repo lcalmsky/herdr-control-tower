@@ -5,8 +5,8 @@
 // holds the keyboard (pane.go), and the legend appears only then.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { exec, run, appHome, terminals, panes, nextCommand } from "herdr";
+import { v_flex, h_flex, ScrollHandle } from "gpui-base";
+import { exec, run, appHome, terminals, panes, nextCommand, checking, focused } from "herdr";
 
 const INK = {
   bg: "#07080d", card: "#11141c", sel: "#1a1e28", raised: "#161a24",
@@ -25,6 +25,8 @@ const STALE_MS = 30 * 60 * 1000;
 const MAX_DONE = 5;
 const SEEN_KEY = "pulse.seen";
 const UNDO_MS = 6000;
+// The scan that reports a newly attached pane runs seconds later; a second click meanwhile must not open another.
+const ATTACH_GRACE_MS = 15000;
 const NONE = "\u0000none";
 const BADGES = { "herdr-app": "herdr", herdr: "herdr", tmux: "tmux", orca: "orca" };
 const GROUP_COLOR = { attention: INK.red, working: INK.blue, done: INK.green };
@@ -101,7 +103,7 @@ function ackSession(key) {
 export default class Pulse extends View {
   init(_props, cx) {
     this.handle = cx.focus_handle();
-    this.scroll = VirtualListScrollHandle.new();
+    this.scroll = ScrollHandle.new();
     this.sessions = [];
     this.meta = { roots: 0, pages: [], unreadablePages: [] };
     this.err = null;
@@ -131,6 +133,8 @@ export default class Pulse extends View {
         }
       }
     });
+    // herdr-app check runs init for real: neither the timer nor the first scan may start there.
+    if (checking()) return;
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     this.poll(cx);
   }
@@ -152,7 +156,7 @@ export default class Pulse extends View {
   }
 
   poll(cx) {
-    if (this.scanning) return;
+    if (this.scanning || checking()) return;
     this.scanning = true;
     cx.spawn(async (cx) => {
       let error = null;
@@ -488,7 +492,7 @@ export default class Pulse extends View {
   reveal(sessionId, data) {
     const rows = this.buildRows(data);
     const index = rows.findIndex((row) => row.kind === "row" && row.item.sessionId === sessionId);
-    if (index >= 0) this.scroll.scroll_to_item(index, "center");
+    if (index >= 0) this.scroll.scroll_to_item(index);
   }
 
   select(sessionId, cx) {
@@ -562,6 +566,24 @@ export default class Pulse extends View {
       return;
     }
     const where = item.where ?? {};
+    if (where.kind === "claude-bg" && where.attachId) {
+      if (where.paneId && panes().some((candidate) => candidate.pane === where.paneId)) {
+        run("pane.focus", { pane: where.paneId });
+        return;
+      }
+      // The scan that would report the new attach pane runs seconds later; a second click meanwhile must not open another.
+      const opened = this.attachOpened?.[where.attachId];
+      if (opened && Date.now() - opened < ATTACH_GRACE_MS) return;
+      // Pulse holds the keyboard here, so the split names the focused pane; another machine's pane would run attach there.
+      const pane = focused()?.pane;
+      if (!pane || pane.includes("/")) {
+        this.flash(cx, "Focus a pane on this computer to attach");
+        return;
+      }
+      this.attachOpened = { ...this.attachOpened, [where.attachId]: Date.now() };
+      run("pane.split", { pane, direction: "right", argv: ["claude", "attach", where.attachId] });
+      return;
+    }
     if (where.kind === "tmux" && where.paneId) {
       const base = where.socket ? ["-S", where.socket] : [];
       const calls = [
@@ -584,7 +606,10 @@ export default class Pulse extends View {
           const result = await exec("/Applications/Orca.app/Contents/Resources/bin/orca",
             ["terminal", "switch", "--terminal", where.handle, "--json"]);
           if (result.code !== 0) this.flash(later, "Not in Herdr, tmux or Orca");
-          else await exec("open", ["-a", "Orca"]);
+          else {
+            const shown = await exec("open", ["-a", "Orca"]).catch(() => null);
+            if (shown?.code !== 0) this.flash(later, "Switched in Orca, but couldn't bring it forward");
+          }
         } catch {
           this.flash(later, "Not in Herdr, tmux or Orca");
         }
@@ -1003,7 +1028,7 @@ export default class Pulse extends View {
     const draw = (row) => row.kind === "sec" ? this.sectionHeader(row.group)
       : row.kind === "more" ? this.moreRow(row.count)
       : this.rowView(row.item, row.item.sessionId === this.sel);
-    return v_flex().id("pulse-list").flex_1().min_h(0).px(8).pb(8).overflow_y_scroll()
+    return v_flex().id("pulse-list").flex_1().min_h(0).px(8).pb(8).overflow_y_scroll().track_scroll(this.scroll)
       .children(rows.map((row) => div().id(`row-${row.key}`).flex_none().when(row.kind === "row", (element) => element.pt(4)).child(draw(row))));
   }
 
