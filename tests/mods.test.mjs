@@ -500,6 +500,19 @@ test("pulse attaches a background session once and refuses another machine", asy
   assert.equal(remote.runs.filter((call) => call.name === "pane.split").length, 0);
   assert.equal(remoteView.notice, "Focus a pane on this computer to attach");
 
+  // A remote space is refused even when its pane id carries no prefix.
+  const remoteSpace = herdrState({
+    focused: { space: "s2", pane: "p2" },
+    spaces: [{ id: "s2", machine: "m1", tabs: [] }],
+  });
+  new Mod().goTo(item, makeCx());
+  assert.equal(remoteSpace.runs.filter((call) => call.name === "pane.split").length, 0);
+
+  // While Pulse holds the keyboard focused() may name no pane: the split falls back to the implicit focused pane.
+  const noPane = herdrState({ focused: { space: "s1", pane: null }, spaces: [{ id: "s1", machine: null, tabs: [] }] });
+  new Mod().goTo(item, makeCx());
+  assert.deepEqual(noPane.runs, [{ name: "pane.split", args: { direction: "right", argv: ["claude", "attach", "0f639cb3"] } }]);
+
   // A pane already running `claude attach` for the session gets the focus instead of a new split.
   const attached = herdrState({ focused: { pane: "p1" }, panes: [{ pane: "p9", terminal: "a9", tab: "t1" }] });
   new Mod().goTo({ pid: null, where: { ...item.where, paneId: "p9" } }, makeCx());

@@ -6,7 +6,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, run, appHome, terminals, panes, nextCommand, checking, focused } from "herdr";
+import { exec, run, appHome, terminals, panes, spaces, nextCommand, checking, focused } from "herdr";
 
 const INK = {
   bg: "#07080d", card: "#11141c", sel: "#1a1e28", raised: "#161a24",
@@ -574,14 +574,16 @@ export default class Pulse extends View {
       // The scan that would report the new attach pane runs seconds later; a second click meanwhile must not open another.
       const opened = this.attachOpened?.[where.attachId];
       if (opened && Date.now() - opened < ATTACH_GRACE_MS) return;
-      // Pulse holds the keyboard here, so the split names the focused pane; another machine's pane would run attach there.
-      const pane = focused()?.pane;
-      if (!pane || pane.includes("/")) {
+      // The session runs here; a split of another machine's pane would run attach on that machine.
+      const f = focused();
+      const space = f ? spaces().find((candidate) => candidate.id === f.space) : null;
+      if (Boolean(space?.machine) || String(f?.pane ?? "").includes("/")) {
         this.flash(cx, "Focus a pane on this computer to attach");
         return;
       }
       this.attachOpened = { ...this.attachOpened, [where.attachId]: Date.now() };
-      run("pane.split", { pane, direction: "right", argv: ["claude", "attach", where.attachId] });
+      const argv = ["claude", "attach", where.attachId];
+      run("pane.split", f?.pane ? { pane: f.pane, direction: "right", argv } : { direction: "right", argv });
       return;
     }
     if (where.kind === "tmux" && where.paneId) {

@@ -11,7 +11,7 @@ The preview and the animation use made-up agents and terminals. They are rendere
 Paste this into an agent running in Herdr:
 
 ```
-Read ~/.config/herdr-app/AGENTS.md, then add this layout and copy its themes/control-tower.json to ~/.config/herdr-app/themes/: https://github.com/lcalmsky/herdr-control-tower
+Read ~/.config/herdr-app/AGENTS.md, then add this layout, copy its layouts/control-tower.png next to the layout file and its themes/control-tower.json to ~/.config/herdr-app/themes/: https://github.com/lcalmsky/herdr-control-tower
 ```
 
 By hand: copy `layouts/control-tower.json` and `layouts/control-tower.png` to `~/.config/herdr-app/layouts/`, each folder in `mods/` to `~/.config/herdr-app/mods/`, and `themes/control-tower.json` to `~/.config/herdr-app/themes/`.

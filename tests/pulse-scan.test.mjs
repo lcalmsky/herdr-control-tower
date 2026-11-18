@@ -33,6 +33,7 @@ async function loadPulse() {
       export const appHome = () => "";
       export const terminals = () => [];
       export const panes = () => [];
+      export const spaces = () => [];
       export const nextCommand = () => new Promise(() => {});
       export const checking = () => false;
       export const focused = () => null;
